@@ -1,0 +1,11 @@
+wx4py
+openai
+python-dotenv
+apscheduler
+pydantic
+pillow
+ddddocr
+beautifulsoup4
+lxml
+requests
+httpx
