@@ -1,10 +1,11 @@
 # 微信贾维斯 (WeChat J.A.R.V.I.S)
 
-> 基于 wx4py + DeepSeek 的微信群聊 AI Agent，支持课表管理、DDL 追踪、图片识别、自我进化。
+> 基于 wx4py + DeepSeek 的微信群聊 AI Agent，支持多 Agent 协作、课表管理、DDL 追踪、图片识别、自我进化。
 
 ## 核心特点
 
-* **自进化**：真正的 Plan→Act→Verify→Reflect 闭环。失败时自动修复，成功后沉淀为可复用 Pipeline。
+* **多 Agent 协作**：6 个子 Agent（code-executor / web-designer / researcher / course-manager / vision-analyst / system-admin）并行分工，Swarm 引擎自动编排任务、Agent 间可直接 REQUEST/RESULT 通信。
+* **Self-Harness 自进化**：Plan→Confirm→Act→Verify→Reflect 闭环 + HarnessGuard 死循环防护。失败自动修复，重复调用 3 次自动阻断，成功方案沉淀为可复用 Pipeline。
 * **自动造工具**：遇到不会的任务，AI 自行分析、生成方案、创建新技能，无需人工编码。
 * **自我反思**：任务完成后自动总结得失，evolve_pipeline 存档供下次复用。
 * **自定义人设**：可以自己取名字（默认"贾维斯"），称呼用户为"老大"。
@@ -26,6 +27,35 @@
 
 ---
 
+## Agent Swarm 架构
+
+复杂任务自动拆解为子任务，由 6 个专业化子 Agent 并行执行：
+
+```
+用户消息
+  ↓
+主 Agent（大脑）拆解任务
+  ↓
+┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
+│  code-   │   web-   │ resear-  │ course-  │ vision-  │ system-  │
+│ executor │ designer │  cher    │ manager  │ analyst  │  admin   │
+│ 写代码    │ 做网页   │ 搜资料   │ 管课表   │ 识图片   │ 管环境   │
+└──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
+  ↓ 各Agent并行执行，Agent间可 [REQUEST:agent] 消息求助
+Swarm 汇总结果 → 组装最终回复
+```
+
+| 子 Agent | 模型 | 负责 |
+|----------|------|------|
+| `code-executor` | deepseek-v4-pro | 代码编写、运行、命令执行 |
+| `web-designer` | deepseek-v4-pro | 网页设计、内网穿透分享 |
+| `researcher` | deepseek-chat | 联网搜索、信息收集分析 |
+| `course-manager` | deepseek-chat | 课表查询、作业管理 |
+| `vision-analyst` | qwen-vl-plus | 图片 OCR、课表截图识别 |
+| `system-admin` | deepseek-chat | 环境搭建、服务部署 |
+
+---
+
 ## 核心能力
 
 * **课表管理**：查询、添加、删除课程，自动识别当前教学周并过滤。
@@ -35,6 +65,7 @@
 * **内网穿透**：通过 expose 工具（http.server + ngrok），一键将本地文件或页面生成公网链接分享。
 * **代码执行**：提供安全沙箱 Python 代码执行能力及需确认的系统命令运行环境。
 * **技能系统**：AI 自动注册新技能到 `Skills/` 目录并更新 `manifest.json`，下次同类任务直接复用。
+* **Self-Harness 防护**：HarnessGuard 监控工具调用频率，同一参数连续重复 3 次自动阻断，防止死循环。
 
 ---
 
@@ -69,6 +100,29 @@
 | CRAWLER_USERNAME | 教务系统登录用户名 | 否（爬虫用） |
 | CRAWLER_PASSWORD | 教务系统登录密码 | 否（爬虫用） |
 | CRAWLER_LOGIN_URL | 教务系统登录页 URL | 否（爬虫用） |
+
+---
+
+## 项目结构
+
+```
+.
+├── wx4py_bridge.py              # 消息桥接入 口
+├── dorm_butler/                 # 核心 Agent 模块
+│   ├── butler_agent.py          # 主对话逻辑
+│   ├── tools.py                 # 工具集（24个工具）
+│   ├── memory.py                # 记忆系统 + run_code
+│   ├── skill_manager.py         # 技能注册
+│   ├── agent_swarm.py           # 多 Agent 协作引擎
+│   ├── sub_agent.py             # SubAgent 执行器
+│   ├── harness_guard.py         # 死循环防护
+│   ├── agents.json              # 子 Agent 配置
+│   └── vision_processor.py      # 双 AI 视觉链路
+├── Skills/                      # 技能目录（Agent 自进化产物）
+├── crawler.py                   # 教务系统爬虫
+├── schema.sql                   # 数据库建表语句
+└── .env.example                 # 环境变量模板
+```
 
 ---
 

@@ -28,9 +28,11 @@
 
 ### Agent 核心能力
 - [x] DeepSeek 函数调用（工具链 24 个工具）
+- [x] 多 Agent 协作（6 个子 Agent 并行分工）
 - [x] 对话上下文（最近 20 轮记忆）
 - [x] 用户画像（Agent 自动记录用户偏好）
 - [x] Harness 自进化 Pipeline（Plan→Confirm→Act→Verify→Reflect）
+- [x] HarnessGuard 死循环防护（重复调用自动阻断）
 - [x] 深度思考模式（fast/deep/auto 三档 think 工具）
 - [x] run_code 安全沙箱（Python 代码执行）
 - [x] run_cmd 系统命令（需确认）
@@ -74,6 +76,12 @@
 - [x] propose_skill / register_skill 自动创建新技能
 - [x] manifest.json 结构化技能索引
 - [x] 前置意图分类自动匹配技能
+
+### 多 Agent 协作
+- [x] Agent Swarm 引擎（并行派发 + 结果汇总）
+- [x] 6 个专业化子 Agent（code-executor / web-designer / researcher / course-manager / vision-analyst / system-admin）
+- [x] Agent 间 REQUEST/RESULT 协议
+- [x] 子 Agent 结果审核机制（review_result）
 
 ## 4. 指令说明
 
@@ -155,6 +163,10 @@ CRAWLER_PASSWORD=
 │   ├── memory.py             # 记忆系统 + run_code
 │   ├── tools.py              # 24个工具定义
 │   ├── skill_manager.py      # 技能管理
+│   ├── agent_swarm.py        # 多 Agent 协作引擎
+│   ├── sub_agent.py          # SubAgent 执行器
+│   ├── harness_guard.py      # 死循环防护
+│   ├── agents.json           # 子 Agent 配置
 │   ├── scheduler.py          # 定时任务
 │   ├── sessions.py           # 会话管理
 │   └── vision_processor.py   # 视觉识别链路

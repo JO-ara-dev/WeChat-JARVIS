@@ -38,6 +38,10 @@
 │   ├── memory.py             # 对话历史 + 用户画像 + run_code 工具
 │   ├── tools.py              # 工具集（24个工具）
 │   ├── skill_manager.py      # 技能管理器（清单加载/意图分类/技能注册）
+│   ├── agent_swarm.py        # 多 Agent 协作引擎（并行派发 + Agent间通信）
+│   ├── sub_agent.py          # SubAgent 执行器（独立DeepSeek调用 + 模型路由）
+│   ├── harness_guard.py      # HarnessGuard 死循环防护
+│   ├── agents.json           # 子 Agent 配置
 │   ├── scheduler.py          # 定时任务调度器
 │   ├── sessions.py           # 多会话管理
 │   └── vision_processor.py   # 双 AI 视觉识别链路
@@ -97,7 +101,30 @@ plan_task  展示给用户  update_todo  self_heal  reflect → evolve_pipeline
 | Evolve | `evolve_pipeline` | 成功方案注册到 config 表持久化 |
 | Reuse | `reuse_pipeline` | 同类任务先查缓存复用 |
 
-## 6. 工具清单 (24个)
+## 6. 多 Agent 协作架构 (Agent Swarm)
+
+```
+用户消息 → 主 Agent 拆解任务
+  ↓
+AgentSwarm.launch_parallel()
+  ├── code-executor (v4-pro) — 编写/运行代码、执行命令
+  ├── web-designer (v4-pro)  — 网页设计、内网穿透分享
+  ├── researcher (chat)      — 联网搜索、信息收集
+  ├── course-manager (chat)  — 课表查询、作业管理
+  ├── vision-analyst (qwen-vl)— 图片 OCR、课表识别
+  └── system-admin (chat)    — 环境搭建、服务部署
+  ↓
+各 Agent 并行执行（独立 DeepSeek 上下文）
+  ├── Agent 间可通过 [REQUEST:agent] 求助
+  └── 主 Agent 审核结果 (review_result) → 通过则组装回复
+```
+
+### HarnessGuard 死循环防护
+- `before_tool()`: 工具调用前检查同一参数重复次数
+- 同一工具+同一参数连续调用 ≥3 次 → 自动阻断
+- `after_tool()`: 调用后记录，新对话自动清空
+
+## 7. 工具清单 (24个)
 
 ### 任务规划
 | 工具 | 说明 |
@@ -158,9 +185,9 @@ plan_task  展示给用户  update_todo  self_heal  reflect → evolve_pipeline
 | `get_memory` | 查询用户记忆 |
 | `delete_memory` | 删除记忆 |
 
-## 7. 数据库设计
+## 8. 数据库设计
 
-### 7.1 课表表 (courses)
+### 8.1 课表表 (courses)
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | id | INTEGER | 主键 |
@@ -171,7 +198,7 @@ plan_task  展示给用户  update_todo  self_heal  reflect → evolve_pipeline
 | end_node | INTEGER | 结束节次 |
 | weeks | TEXT | 上课周次 (如 "1-16") |
 
-### 7.2 任务表 (tasks)
+### 8.2 任务表 (tasks)
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | id | INTEGER | 主键 |
@@ -184,7 +211,7 @@ plan_task  展示给用户  update_todo  self_heal  reflect → evolve_pipeline
 | creator_nickname | TEXT | 创建者昵称 |
 | scope | TEXT | private/public |
 
-### 7.3 用户表 (users)
+### 8.3 用户表 (users)
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | user_id | TEXT | 主键 |
@@ -192,13 +219,13 @@ plan_task  展示给用户  update_todo  self_heal  reflect → evolve_pipeline
 | platform | TEXT | wechat |
 | created_at | DATETIME | 注册时间 |
 
-### 7.4 配置表 (config)
+### 8.4 配置表 (config)
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | key | TEXT | 配置键（唯一） |
 | value | TEXT | 配置值 |
 
-### 7.5 待确认表 (pending_actions)
+### 8.5 待确认表 (pending_actions)
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | id | INTEGER | 主键 |
@@ -208,7 +235,7 @@ plan_task  展示给用户  update_todo  self_heal  reflect → evolve_pipeline
 | confidence | REAL | 置信度 |
 | status | TEXT | pending/confirmed/cancelled |
 
-### 7.6 对话历史 (chat_history)
+### 8.6 对话历史 (chat_history)
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | id | INTEGER | 主键 |
@@ -217,7 +244,7 @@ plan_task  展示给用户  update_todo  self_heal  reflect → evolve_pipeline
 | role | TEXT | user/assistant |
 | content | TEXT | 消息内容 |
 
-### 7.7 用户画像 (user_memory)
+### 8.7 用户画像 (user_memory)
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | user_id | TEXT | 用户 ID |
@@ -226,7 +253,7 @@ plan_task  展示给用户  update_todo  self_heal  reflect → evolve_pipeline
 | scope | TEXT | private/public |
 | (user_id, key) | UNIQUE | 联合唯一 |
 
-## 8. 双 AI 视觉识别流
+## 9. 双 AI 视觉识别流
 
 ```
 输入: 微信图片
@@ -240,14 +267,14 @@ DeepSeek 分析意图 → JSON
 存入 pending_actions 表 → 等待确认
 ```
 
-## 9. 人设系统
+## 10. 人设系统
 
 - **自称**: J.V（贾维斯）
 - **称呼用户**: 老大
 - **风格**: 专业高效、简洁有条理、用 emoji 点缀
 - **工作流**: Plan→Confirm→Act→Verify→Reflect
 
-## 10. 安全与限流
+## 11. 安全与限流
 
 ### 工具安全
 - `run_cmd`: 危险命令黑名单 (format, del, rm -rf, shutdown 等)
@@ -259,7 +286,7 @@ DeepSeek 分析意图 → JSON
 - DeepSeek API: 60次/分钟
 - DashScope Qwen-VL: 注意 QPS 限制
 
-## 11. 环境变量配置
+## 12. 环境变量配置
 
 | 服务 | 必需配置项 |
 |------|-----------|
@@ -268,7 +295,7 @@ DeepSeek 分析意图 → JSON
 | 内网穿透 | TUNNEL_PROVIDER (auto/cpolar/ngrok) |
 | 教务爬虫 | CRAWLER_LOGIN_URL, CRAWLER_USERNAME, CRAWLER_PASSWORD |
 
-## 12. 技能系统
+## 13. 技能系统
 
 ### 12.1 技能清单目录
 ```
@@ -304,7 +331,7 @@ AI 调用 register_skill(confirmed=true)
   └── 同步 README.md 表格
 ```
 
-## 13. 模型架构（经济双模）
+## 14. 模型架构（经济双模）
 
 | 角色 | 模型 | 用途 |
 |------|------|------|
