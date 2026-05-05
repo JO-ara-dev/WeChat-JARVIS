@@ -453,8 +453,12 @@ def web_search(query: str) -> dict:
         return {"success": False, "data": None, "message": f"搜索失败: {str(e)}"}
 
 
-def read_file(file_path: str) -> dict:
-    """读取文件内容"""
+def read_file(file_path: str, limit: int = None, offset: int = 0) -> dict:
+    """
+    读取文件内容。支持分段读取大文件。
+    limit: 最多读取行数，不传则读全部
+    offset: 起始行号（从0开始），不传默认第0行
+    """
     import os
     
     # 安全限制：只允许读取项目目录下的文件
@@ -469,9 +473,30 @@ def read_file(file_path: str) -> dict:
             return {"success": False, "data": None, "message": f"文件不存在: {file_path}"}
         
         with open(full_path, 'r', encoding='utf-8') as f:
-            content = f.read()
+            lines = f.readlines()
         
-        return {"success": True, "data": {"path": file_path, "content": content}, "message": f"读取成功: {file_path}"}
+        total_lines = len(lines)
+        
+        # 应用 offset 和 limit
+        start = max(0, offset)
+        end = start + limit if limit is not None else total_lines
+        end = min(end, total_lines)
+        
+        selected = lines[start:end]
+        content = "".join(selected)
+        
+        return {
+            "success": True,
+            "data": {
+                "path": file_path,
+                "content": content,
+                "total_lines": total_lines,
+                "returned_lines": len(selected),
+                "offset": start,
+                "limit": limit,
+            },
+            "message": f"读取成功: 第{start+1}-{end}行 / 共{total_lines}行"
+        }
     except Exception as e:
         return {"success": False, "data": None, "message": f"读取失败: {str(e)}"}
 
@@ -976,6 +1001,176 @@ def register_skill(user_id: str, name: str, skill_md_content: str, confirmed: bo
     return result
 
 
+# ─── 多 Agent 协作：任务分发 ───
+
+import threading as _threading
+
+# 线程安全：异步结果池 + 并发控制
+_result_lock = _threading.Lock()
+_pending_sub_results: dict[str, dict] = {}
+_sub_semaphore = _threading.Semaphore(6)
+
+
+def _run_sub_agent(user_id: str, agent_name: str, agent_config: dict, task_key: str,
+                   task_description: str, context: str):
+    """后台线程执行子Agent"""
+    from .sub_agent import SubAgent
+    sub = SubAgent(agent_name, agent_config, user_id)
+    result = sub.execute(task_description, context)
+    with _result_lock:
+        _pending_sub_results[task_key] = result
+    _sub_semaphore.release()
+
+
+def delegate_task(user_id: str, agent_name: str, task_description: str,
+                  context: str = "", progress_callback=None) -> dict:
+    """
+    主Agent将任务分发给子Agent独立执行（异步，不阻塞）。
+    调用后立即返回状态，主Agent可继续对话。
+    用 get_pending_result 获取执行结果。
+    """
+    from .sub_agent import load_agents
+
+    agents = load_agents()
+    agent_config = None
+    for a in agents:
+        if a["name"] == agent_name:
+            agent_config = a
+            break
+
+    if not agent_config:
+        available = [a["name"] for a in agents]
+        return {"success": False, "message": f"未找到子Agent: {agent_name}，可用: {available}"}
+
+    # 并发控制
+    if not _sub_semaphore.acquire(blocking=False):
+        return {"success": False, "message": f"所有 6 个Agent当前繁忙，请稍后重试"}
+
+    # 通知用户
+    tools_str = ", ".join(agent_config.get("tools", [])[:4])
+    if progress_callback:
+        progress_callback(
+            f"已调用 {agent_name} Agent\n"
+            f"擅长：{agent_config.get('description', '通用任务')}\n"
+            f"工具：{tools_str}\n"
+            f"正在执行任务...（可用 get_pending_result 查询结果）"
+        )
+
+    task_key = f"{user_id}:{agent_name}:{int(time.time())}"
+    t = _threading.Thread(
+        target=_run_sub_agent,
+        args=(user_id, agent_name, agent_config, task_key, task_description, context),
+        daemon=True,
+    )
+    t.start()
+
+    return {
+        "success": True,
+        "data": {"agent": agent_name, "task_key": task_key, "status": "dispatched"},
+        "message": f"已分派 [{agent_name}]，后台执行中。"
+    }
+
+
+def get_pending_result(user_id: str) -> dict:
+    """
+    检查当前用户是否有子Agent返回了结果。
+    非阻塞：有结果就返回，没有就返回 pending 状态。
+    """
+    with _result_lock:
+        for key, result in list(_pending_sub_results.items()):
+            if key.startswith(user_id + ":"):
+                del _pending_sub_results[key]
+                # 提取 agent_name
+                parts = key.split(":")
+                agent_name = parts[1] if len(parts) > 1 else "unknown"
+                return {
+                    "success": True,
+                    "data": {"agent": agent_name, "result": result},
+                    "message": f"[{agent_name}] 执行完成，请审核结果并回复用户。"
+                }
+    return {"success": True, "data": None, "message": "暂无完成的子Agent结果"}
+
+
+def swarm_execute(user_id: str, workflow_json: str = "", progress_callback=None) -> dict:
+    """
+    多Agent协作编排：并行派发多个Agent，等待全部完成后汇总。
+    支持 Agent 间 REQUEST/RESULT 通信协议。
+
+    workflow_json: JSON 字符串，格式:
+    {
+        "parallel": [
+            {"task_id": "1", "agent": "web-designer", "task": "设计猫妖风格主页"},
+            {"task_id": "2", "agent": "researcher", "task": "查猫妖背景资料"}
+        ],
+        "final": {"agent": "code-executor", "task": "汇总所有结果生成HTML"},
+        "interop": true
+    }
+    """
+    import json as _json
+    from .agent_swarm import AgentSwarm, clear_all_messages
+
+    try:
+        workflow = _json.loads(workflow_json)
+    except _json.JSONDecodeError:
+        return {"success": False, "message": "workflow_json 格式错误"}
+
+    clear_all_messages()
+    swarm = AgentSwarm(user_id)
+
+    # 注册并行任务
+    for task in workflow.get("parallel", []):
+        swarm.add_task(task["task_id"], task["agent"], task["task"])
+
+    if progress_callback:
+        progress_callback(f"Swarm 启动：{len(swarm.tasks)} 个Agent并行执行...")
+
+    # 启动并行
+    swarm.launch_parallel(progress_callback)
+
+    # 汇总结果
+    summary = []
+    for tid, info in swarm.tasks.items():
+        result = info.get("result", {})
+        output = result.get("output", "") if result else ""
+        summary.append(f"[{info['agent']}] {info['status']}: {output[:100]}")
+
+    # 有 final 阶段
+    final_output = ""
+    if workflow.get("final"):
+        from .sub_agent import load_agents, SubAgent
+        agents_config = {a["name"]: a for a in load_agents()}
+        final_cfg = agents_config.get(workflow["final"]["agent"])
+        if final_cfg:
+            context = "\n\n## 其他Agent的产出\n" + "\n".join(summary)
+            sub = SubAgent(workflow["final"]["agent"], final_cfg, user_id)
+            final_result = sub.execute(workflow["final"]["task"], context)
+            final_output = final_result.get("output", "")
+
+    return {
+        "success": True,
+        "data": {
+            "summary": summary,
+            "final_output": final_output[:1500],
+        },
+        "message": f"Swarm 完成：{len(swarm.tasks)} 个并行任务" + (", final已执行" if final_output else "")
+    }
+
+
+def list_agents(user_id: str = "") -> dict:
+    """查看所有子Agent的当前状态（空闲/繁忙）"""
+    from .sub_agent import get_agent_states, load_agents
+
+    states = get_agent_states()
+    busy = sum(1 for s in states.values() if s["status"] == "busy")
+    idle = sum(1 for s in states.values() if s["status"] == "idle")
+
+    return {
+        "success": True,
+        "data": states,
+        "message": f"当前 {busy} 繁忙 / {idle} 空闲"
+    }
+
+
 # ── 工具定义（OpenAI function calling 格式）──
 
 TOOLS_SCHEMA = [
@@ -1223,11 +1418,13 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "读取文件内容。可以读取代码、配置文件、数据文件等。",
+            "description": "读取文件内容。可以读取代码、配置文件、数据文件等。支持 offset/limit 分段读取大文件。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_path": {"type": "string", "description": "文件路径（相对于项目根目录）"}
+                    "file_path": {"type": "string", "description": "文件路径（相对于项目根目录）"},
+                    "limit": {"type": "integer", "description": "最多读取行数，不传则读全部。大文件建议传 500-1000 避免 token 超限"},
+                    "offset": {"type": "integer", "description": "起始行号（从0开始），不传默认第0行"}
                 },
                 "required": ["file_path"]
             }
@@ -1318,6 +1515,41 @@ TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
+            "name": "get_pending_result",
+            "description": "检查是否有子Agent返回了异步执行结果。非阻塞轮询：有结果就返回，没有就返回pending。用户追问或新消息时先调此工具检查。",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "swarm_execute",
+            "description": "多Agent协作编排：并行派发多个Agent协同完成任务。支持Agent间REQUEST/RESULT通信协议。适合复杂多步骤任务（写网页+查资料+识图→组装）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "description": "用户ID"},
+                    "workflow_json": {"type": "string", "description": "JSON格式的工作流定义：{\"parallel\":[{\"task_id\":\"1\",\"agent\":\"researcher\",\"task\":\"...\"},...],\"final\":{\"agent\":\"code-executor\",\"task\":\"汇总\"},\"interop\":true}"}
+                },
+                "required": ["user_id", "workflow_json"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_agents",
+            "description": "查看所有子Agent的当前工作状态（哪些空闲、哪些正在执行任务）。用户问「Agent状态」「谁在忙」「哪些空闲」时调用。",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "set_nickname",
             "description": "设置当前用户的昵称。用户说「我叫XX」「我是XX」「叫我XX」时调用。",
             "parameters": {
@@ -1372,6 +1604,23 @@ TOOLS_SCHEMA = [
                     "mobile_fix": {"type": "boolean", "description": "是否自动添加手机端适配，默认 true"}
                 },
                 "required": ["user_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delegate_task",
+            "description": "将任务分发给指定的子Agent后台执行（异步，不阻塞）。调用后立即返回，用 get_pending_result 获取结果。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "description": "用户ID"},
+                    "agent_name": {"type": "string", "description": "子Agent名称"},
+                    "task_description": {"type": "string", "description": "要执行的详细任务描述"},
+                    "context": {"type": "string", "description": "额外上下文信息，可选"}
+                },
+                "required": ["user_id", "agent_name", "task_description"]
             }
         }
     },
@@ -1439,4 +1688,8 @@ TOOLS_MAP = {
     "expose": expose,
     "propose_skill": propose_skill,
     "register_skill": register_skill,
+    "delegate_task": delegate_task,
+    "get_pending_result": get_pending_result,
+    "swarm_execute": swarm_execute,
+    "list_agents": list_agents,
 }

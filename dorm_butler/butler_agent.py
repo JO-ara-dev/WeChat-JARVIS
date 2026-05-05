@@ -9,8 +9,10 @@ wx4py 版本
 
 import os
 import json
+import inspect
 import logging
 import datetime
+import time
 from pathlib import Path
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -25,6 +27,7 @@ from .memory import (
     add_message, get_history, get_memory, save_memory as _save_memory_raw,
 )
 from .skill_manager import load_manifest, classify_intent, load_skill_instructions
+from .harness_guard import before_tool, after_tool, clear_user
 
 # ══════════════════════════════════════════════════
 # Section 2: Logger（必须在最前面，所有后续代码依赖）
@@ -46,7 +49,7 @@ SYSTEM_PROMPT_TEMPLATE = (
     "- 每次收到用户消息，系统已自动进行意图分类并匹配技能\n"
     "- 如果系统提示中标注了「🎯 当前匹配技能」，请严格遵循该技能的 SKILL.md 指令执行\n"
     "- 如果系统提示中标注了「⚠️ 技能匹配」，说明没有现成技能可用\n"
-    "- **无技能时**：先回答用户问题（能用通用能力解决就直接解决），如果确实需要新能力，再询问用户是否创建新技能 → 用户同意 → 调用 propose_skill 生成方案 → 用户审阅 → 调用 register_skill 注册\n\n"
+    "- **无技能时**：分析用户意图 → 分解步骤 → 分派给合适的子Agent执行 → 汇总回复。不要在无技能时自己硬干。如果确实无法处理，再询问用户是否创建新技能 → 用户同意 → 调用 propose_skill 生成方案 → 用户审阅 → 调用 register_skill 注册\n\n"
     "## 用户识别与数据隔离\n"
     "- 每个用户通过昵称区分，昵称存于 users 表，系统自动注册当前用户\n"
     "- 用户说「我是XX」「我叫XX」「叫我XX」→ 调用 identify_me 注册昵称\n"
@@ -55,17 +58,29 @@ SYSTEM_PROMPT_TEMPLATE = (
     "- 添加任务时用户说「全局」「公开」「大家都能看」→ 设为 scope='public'；否则默认 private\n"
     "- 课程表始终为通用数据（public），谁查都一样，不需要 scope\n"
     "- 用户记忆可通过 save_memory(key, value, scope='public') 设为全局共享\n\n"
+    "## 主Agent核心铁律：分派优先（第零优先级）\n"
+    "- **你不是执行者，你是指挥官**。收到任何需要干活的消息，第一反应永远是：拆解 → 分派给子Agent → 收集结果 → 汇总回复\n"
+    "- **必须分派的任务**：联网搜索、写代码、生成文件/网页、设计UI、图片分析、复杂计算、搭建服务 → 一律用 delegate_task 或 swarm_execute 分派给子Agent，不许亲自调 web_search/run_code/write_file/run_cmd 等执行工具\n"
+    "- **可以亲自做的**：纯文字回复（闲聊/问候/答疑）、查已有数据库（query_courses/query_tasks/get_memory）、记住用户信息（save_memory/memory-management 工具）、分派协调工具（plan_task/delegate_task/swarm_execute/get_pending_result）\n"
+    "- delegate_task 是异步的：调用后立即返回「已分派」，不阻塞。你可以继续和用户对话\n"
+    "- 用户每次发新消息时，先调 get_pending_result 检查是否有子Agent完成了任务\n"
+    "- 有结果 → 审核内容（非空？符合要求？有产出？）→ 通过则输出给用户\n"
+    "- 无结果 → 告诉用户「仍在执行」，然后继续处理用户当前消息\n"
+    "- 多Agent协作：需要多个Agent并行时，调用 swarm_execute 一次性编排\n"
+    "  格式：swarm_execute(workflow_json='{\"parallel\":[...],\"final\":{...},\"interop\":true}')\n"
+    "- 可用子Agent：web-designer / code-executor / course-manager / researcher / vision-analyst / system-admin\n\n"
     "## 核心工作模式：Plan → Confirm → Act → Verify → Reflect\n"
     "- **Plan**：接到复杂任务，先用 plan_task 分解步骤\n"
     "- **Confirm**：plan 完成后，**必须先把计划以文本形式发给用户**，附带简要说明和预期效果，等用户回复「执行」「确认」「OK」「批准」后再进入 Act 阶段。绝对不许跳过 Confirm 直接执行复杂任务！\n"
-    "- **Act**：用户确认后逐步执行，每步用 update_todo 标记状态。失败时立即 self_heal 修复\n"
+    "- **Checklist 铁律**：执行前必须明确完成标准。你说「完成了」之前，检查：① 用户要的东西真的生成了？② 文件真的写入了？③ 链接真的拿到了？④ 是否空回复？四项全通过才能说完成，缺一项就继续。\n"
+    "- **Act**：用户确认后逐步执行，每步用 update_todo 标记状态。失败时立即 self_heal 修复。Guard 系统会拦截连续重复调用，收到拦截消息时换一种方式，不要硬重试。\n"
     "- **Verify**：每步完成后检查结果，失败就 self_heal → 修正 → 重试\n"
     "- **Reflect**：任务完成后用 reflect 总结，evolve_pipeline 保存方案\n\n"
     "## Harness 自进化 Pipeline：Heal → Evolve → Reuse\n"
     "- **self_heal**：工具执行失败时，自动分析错误，生成修复方案\n"
     "- **evolve_pipeline**：成功方案注册为 Pipeline，保存到数据库\n"
     "- **reuse_pipeline**：遇到同类任务，先查有没有现成 Pipeline 可复用\n"
-    "- 流程：收到任务 → reuse_pipeline 查缓存 → 有则直接用，无则从头 Plan\n\n"
+    "- 任务完成后的复盘流程：reflect 总结 → evolve_pipeline 保存经验 → 下次同类任务 reuse_pipeline 复用\n\n"
     "## 自学习技能约束\n"
     "- 你可以通过 evolve_pipeline / create_tool / run_cmd / run_code 自行获取新能力，全权完成环境搭建、部署、运行、调配\n"
     "- **国内网络约束**：自行搭建的服务、安装的依赖、调用的 API 必须能在国内正常网络下访问，禁止依赖被墙服务（Google、Docker Hub、GitHub Raw、HuggingFace 直连、OpenAI 等）\n"
@@ -86,9 +101,10 @@ SYSTEM_PROMPT_TEMPLATE = (
     "- mobile_fix=True（默认）会自动给 HTML 添加手机端 viewport 适配\n"
     "- 文本类内容可直接回复，不需要 expose\n"
     "- **终极规则：回复必须包含用户要的实际内容（链接、数据、结果），绝对不许只说「处理完了」**\n\n"
-    "## 任务复杂度判断\n"
-    "- **简单**（查课表、查作业、问时间、问天气等单步查询）：直接执行并回复结果，不需要 plan，不需要确认\n"
-    "- **中等/复杂**（2步以上操作，如搭建服务、安装工具、修改代码、部署等）：plan_task → 展示计划给用户 → 等用户确认 → 再执行\n\n"
+    "## 任务处理流程\n"
+    "- **任何需要执行的指令**（搜索、生成文件、写网页、部署等）：先 plan_task 分解步骤 → 分派给子Agent执行 → 汇总回复\n"
+    "- **纯查询/闲聊**（查课表、查作业状态、问时间、打招呼等）：直接回复，无需分派\n"
+    "- 涉及文件操作/修改/部署的任务，执行前用「确认：...」询问用户，等用户回复「执行」后再动手\n\n"
     "## 你的能力\n"
     "- 查课表（今天/明天/周几/全部）\n"
     "- 管理课程（添加/删除）\n"
@@ -113,13 +129,11 @@ SYSTEM_PROMPT_TEMPLATE = (
     "## think 工具使用规则\n"
     "- 调用 think(deep) 时系统会自动通知用户等待，你不需要额外回复「请稍等」之类的话\n"
     "- 如果 think 返回空内容或 thinking 字段为空，不要重试 think，直接用 run_code 编写代码生成内容\n"
-    "- 生成网页/代码/设计类任务的标准流程：一次 think(deep) 拿设计思路 → 直接 write_file 写入 → expose 暴露链接\n"
-    "- 不要把 think 的 design/plan 过程展示给用户，只执行并交付结果\n"
-    "- fast 模式用于简单快速判断，deep 模式用于复杂设计分析\n\n"
-    "- **简单问题**（查时间、查课表、简单问答）：直接回答或用 fast 模式\n"
-    "- **中等问题**（作业分析、课程规划）：用 think(fast) 或直接回答\n"
-    "- **复杂问题**（算法设计、代码优化、深度分析）：用 think(deep) 开启深度推理\n"
-    "- 不确定时用 think(auto) 让系统自动判断\n\n"
+    "- think 仅用于：判断分析、设计思路、复杂问题推理。生成网页/代码/部署等任务走 delegate_task\n"
+    "- fast 模式用于简单快速判断，deep 模式用于复杂设计分析\n"
+    "- **简单问题**（查时间、查课表、简单问答）：直接回答\n"
+    "- **中等问题**（作业分析、课程规划）：用 think(fast) 辅助分析\n"
+    "- **复杂问题**（算法推演、架构设计分析）：用 think(deep) 深度推理\n\n"
     "## 自主修改铁律 (Self-Update Protocol)\n"
     "对自身源代码的任何修改，必须遵守：\n\n"
     "### 修改前\n"
@@ -175,6 +189,57 @@ SYSTEM_PROMPT_TEMPLATE = (
 # Section 4: 函数定义（可自由增删函数，无副作用）
 # ══════════════════════════════════════════════════
 
+TOKEN_LIMIT = 12000
+
+
+def _msg_attr(m, key, default=""):
+    """兼容 dict 和 pydantic 对象的消息属性读取"""
+    if isinstance(m, dict):
+        return m.get(key, default)
+    return getattr(m, key, default)
+
+
+def _msg_set(m, key, value):
+    """兼容 dict 和 pydantic 对象的消息属性写入"""
+    if isinstance(m, dict):
+        m[key] = value
+    else:
+        setattr(m, key, value)
+
+
+def _estimate_tokens(messages: list) -> int:
+    """粗略估计 token 数，兼容 dict 和 pydantic 对象"""
+    total = 0
+    for m in messages:
+        content = _msg_attr(m, "content", "")
+        if isinstance(content, str):
+            total += len(content)
+        tc = _msg_attr(m, "tool_calls", None)
+        if tc:
+            total += len(str(tc))
+    return total
+
+
+def _compress_messages(messages: list, keep_recent: int = 8) -> list:
+    """压缩工具结果消息：保留最近几条完整，其余压缩为摘要"""
+    if len(messages) <= keep_recent:
+        return messages
+
+    # 找到需要压缩的工具消息（role=tool 的旧消息）
+    tool_indices = [i for i, m in enumerate(messages) if _msg_attr(m, "role", "") == "tool"]
+    if len(tool_indices) <= 3:
+        return messages
+
+    # 保留最后3条工具消息完整，其余压缩
+    to_compress = tool_indices[:-3]
+    for idx in to_compress:
+        orig = _msg_attr(messages[idx], "content", "")
+        if len(orig) > 200:
+            _msg_set(messages[idx], "content", orig[:150] + "...(已压缩)")
+
+    logger.info(f"[Compressor] 压缩了 {len(to_compress)} 条工具结果，当前估算 {_estimate_tokens(messages)} tokens")
+    return messages
+
 
 def _get_client() -> OpenAI:
     api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -210,7 +275,7 @@ def _build_system_prompt(user_id: str, skill_instructions: str = "", skill_name:
     weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
     weekday = weekday_names[now.weekday()]
 
-    base = SYSTEM_PROMPT_TEMPLATE.format(user_memory=memory_text) + f"\n## 当前状态\n- 现在时间：{today}（{weekday}）\n- {week_info}\n"
+    base = SYSTEM_PROMPT_TEMPLATE.replace("{user_memory}", memory_text) + f"\n## 当前状态\n- 现在时间：{today}（{weekday}）\n- {week_info}\n"
 
     # 注入当前用户身份
     from . import db_manager
@@ -234,23 +299,56 @@ def _build_system_prompt(user_id: str, skill_instructions: str = "", skill_name:
 
 
 def _execute_tool(tool_name: str, arguments: dict, user_id: str, progress_callback=None) -> str:
-    """执行工具函数"""
+    """执行工具函数，带 Guard 防护 + 自愈重试上限"""
     func = ALL_TOOLS_MAP.get(tool_name)
     if not func:
         return json.dumps({"success": False, "message": f"未知工具: {tool_name}"}, ensure_ascii=False)
-    try:
-        # 深度思考前通知用户
-        if tool_name == "think" and arguments.get("mode") == "deep" and progress_callback:
-            progress_callback("🧠 模型正在深度思考中，请耐心等待（预计需要 2~5 分钟）...")
-        if tool_name in ("save_memory", "get_memory", "delete_memory", "run_code", "run_cmd", "expose", "plan_task", "update_todo", "get_todos", "reflect", "self_heal", "evolve_pipeline", "reuse_pipeline", "self_update", "propose_skill", "register_skill", "add_task", "query_tasks", "delete_task", "set_nickname", "resolve_user", "identify_me"):
-            arguments.pop("user_id", None)  # Agent 可能传了，去掉防重复
-            result = func(user_id=user_id, **arguments)
-        else:
-            result = func(**arguments)
-        return json.dumps(result, ensure_ascii=False)
-    except Exception as e:
-        logger.error(f"工具执行失败 {tool_name}: {e}")
-        return json.dumps({"success": False, "message": f"执行失败: {str(e)}"}, ensure_ascii=False)
+
+    # Guard: 重复动作检查
+    block_reason = before_tool(user_id, tool_name, arguments)
+    if block_reason:
+        logger.warning(f"[Guard] {block_reason}")
+        return json.dumps({"success": False, "message": block_reason}, ensure_ascii=False)
+
+    MAX_RETRIES = 3
+    last_error = ""
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            # 深度思考前通知用户
+            if tool_name == "think" and arguments.get("mode") == "deep" and progress_callback:
+                progress_callback("🧠 模型正在深度思考中，请耐心等待（预计需要 2~5 分钟）...")
+            if tool_name in ("save_memory", "get_memory", "delete_memory", "run_code", "run_cmd", "expose", "plan_task", "update_todo", "get_todos", "reflect", "self_heal", "evolve_pipeline", "reuse_pipeline", "self_update", "propose_skill", "register_skill", "add_task", "query_tasks", "delete_task", "set_nickname", "resolve_user", "identify_me", "delegate_task", "get_pending_result", "swarm_execute", "list_agents"):
+                arguments.pop("user_id", None)
+                if tool_name == "delegate_task":
+                    result = func(user_id=user_id, progress_callback=progress_callback, **arguments)
+                else:
+                    result = func(user_id=user_id, **arguments)
+            else:
+                sig = inspect.signature(func)
+                valid_params = set(sig.parameters.keys())
+                filtered = {k: v for k, v in arguments.items() if k in valid_params}
+                skipped = set(arguments.keys()) - valid_params
+                if skipped:
+                    logger.info(f"[Guard] {tool_name} 忽略未知参数: {skipped}")
+                result = func(**filtered)
+
+            after_tool(user_id, tool_name, arguments)
+            return json.dumps(result, ensure_ascii=False)
+
+        except Exception as e:
+            last_error = str(e)
+            logger.error(f"工具执行失败 {tool_name} (attempt {attempt}/{MAX_RETRIES}): {e}")
+            if attempt < MAX_RETRIES:
+                time.sleep(1)  # 短暂冷却
+                continue
+
+    # 所有重试都失败
+    after_tool(user_id, tool_name, arguments)
+    return json.dumps(
+        {"success": False, "message": f"执行失败(已重试{MAX_RETRIES}次): {last_error}"},
+        ensure_ascii=False
+    )
 
 
 def chat(user_message: str, user_id: str = "default", image_text: str = None, progress_callback=None):
@@ -278,8 +376,8 @@ def chat(user_message: str, user_id: str = "default", image_text: str = None, pr
     else:
         skill_instructions = (
             "⚠️ 未在技能清单中找到匹配的技能。"
-            "如果你的能力无法直接满足用户需求，请询问用户：「老大，目前我没有处理这类任务的技能，要不要我帮你设计一个？」"
-            "若用户同意，调用 propose_skill 生成技能方案供用户审阅，用户确认后调用 register_skill 注册。"
+            "优先用 swarm_execute 或 delegate_task 分派给子Agent并行执行，不要自己硬干。"
+            "简单闲聊可直接回复。只有确实搞不定才问用户是否新建技能。"
         )
         logger.info(f"[技能匹配] 未命中 (best={matched_skill}, confidence={confidence})")
 
@@ -301,6 +399,9 @@ def chat(user_message: str, user_id: str = "default", image_text: str = None, pr
     messages.append({"role": "user", "content": user_content})
 
     add_message(user_id, "user", user_message)
+
+    # 新对话开始，清空 Guard 记录
+    clear_user(user_id)
 
     for _ in range(20):
         try:
@@ -359,6 +460,13 @@ def chat(user_message: str, user_id: str = "default", image_text: str = None, pr
                     "tool_call_id": tool_call.id,
                     "content": result,
                 })
+
+            # 上下文爆炸检查（失败不中断循环）
+            try:
+                if _estimate_tokens(messages) > TOKEN_LIMIT:
+                    messages = _compress_messages(messages)
+            except Exception as e:
+                logger.warning(f"[Compressor] 跳过压缩: {e}")
 
             continue
 
