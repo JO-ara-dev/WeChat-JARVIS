@@ -279,6 +279,24 @@ def main():
     with WeChatClient(auto_connect=True) as wx:
         logger.info("[wx4py] 已连接微信")
         logger.info(f"[wx4py] 监听群聊: {GROUPS}")
+
+        # 预打开群聊子窗口：emoji-only 群名无法通过搜索框输入，
+        # 直接从左侧会话列表定位并双击打开，监听器启动时可直接复用
+        from wx4py.features.messaging.listener import (
+            _find_session_item, _find_window_by_title, _double_click_control,
+        )
+        for group in GROUPS:
+            try:
+                hwnd = _find_window_by_title(group, exclude_hwnd=wx.window.hwnd)
+                if not hwnd:
+                    item = _find_session_item(wx.window.uia.root, group)
+                    if item and _double_click_control(item):
+                        logger.info(f"[窗口] 已从会话列表打开群聊: {group}")
+                    else:
+                        logger.warning(f"[窗口] 无法从会话列表打开: {group}")
+            except Exception:
+                logger.debug(f"[窗口] 跳过预打开: {group}", exc_info=True)
+
         logger.info("[就绪] 贾维斯为老大服务！")
 
         handler = ButlerHandler()

@@ -37,6 +37,7 @@ backups/
 *.jsonl
 bing_result.html
 love_for_yangqingci.html
+*yangqingci*
 
 # OS
 .DS_Store

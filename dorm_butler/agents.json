@@ -1,0 +1,57 @@
+{
+  "agents": [
+    {
+      "name": "code-executor",
+      "description": "代码编写、运行和系统命令执行",
+      "model": "deepseek-v4-pro",
+      "tools": ["think", "write_file", "read_file", "run_code", "run_cmd", "list_files"],
+      "trigger_keywords": ["写代码", "编程", "开发", "HTML", "JS", "Python", "脚本", "程序", "爬虫"],
+      "max_turns": 8
+    },
+    {
+      "name": "web-designer",
+      "description": "网页设计和生成，支持内网穿透分享",
+      "model": "deepseek-v4-pro",
+      "tools": ["think", "write_file", "expose", "read_file", "list_files"],
+      "trigger_keywords": ["网页", "页面", "UI", "设计", "爱心", "特效", "前端", "HTML", "CSS"],
+      "max_turns": 5
+    },
+    {
+      "name": "course-manager",
+      "description": "课表和作业管理",
+      "model": "deepseek-chat",
+      "tools": ["query_courses", "add_courses", "delete_courses", "query_tasks", "add_task", "delete_task", "set_nickname", "resolve_user", "identify_me"],
+      "trigger_keywords": ["课表", "课程", "作业", "DDL", "今天什么课", "明天", "添加课程", "布置作业"],
+      "max_turns": 3
+    },
+    {
+      "name": "researcher",
+      "description": "联网搜索和信息收集分析",
+      "model": "deepseek-chat",
+      "tools": ["think", "web_search", "read_file", "write_file"],
+      "trigger_keywords": ["搜索", "查一下", "调研", "最新", "新闻", "资料", "百度"],
+      "max_turns": 5
+    },
+    {
+      "name": "vision-analyst",
+      "description": "图片识别和OCR分析",
+      "model": "qwen-vl-plus",
+      "tools": ["run_code", "read_file", "write_file", "add_courses", "add_task"],
+      "trigger_keywords": ["识别图片", "OCR", "课表截图", "看图", "图片"],
+      "max_turns": 4
+    },
+    {
+      "name": "system-admin",
+      "description": "系统管理、环境搭建和服务部署",
+      "model": "deepseek-chat",
+      "tools": ["think", "run_cmd", "write_file", "read_file", "list_files", "expose"],
+      "trigger_keywords": ["安装", "部署", "搭建", "启动", "服务", "环境", "依赖"],
+      "max_turns": 6
+    }
+  ],
+  "defaults": {
+    "model": "deepseek-chat",
+    "max_turns": 5,
+    "review_model": "deepseek-chat"
+  }
+}

@@ -90,17 +90,20 @@ def classify_intent(user_message: str, client, skills: list[dict] = None) -> dic
     )
 
     classification_prompt = (
-        "你是一个意图分类器。根据用户消息，判断意图匹配到哪个技能。\n\n"
+        "你是一个意图分类器。分析用户消息的核心意图，匹配到最合适的技能。\n\n"
         "## 可用技能列表\n"
         f"{skills_list_text}\n\n"
         "## 规则\n"
-        "- 仔细匹配用户消息中的关键词和技能触发词\n"
-        "- 如果明确匹配某个技能，设置 matched_skill 为该技能 name\n"
-        "- 如果模糊匹配，选择最相关的一个，confidence 设低一些（0.5-0.7）\n"
-        "- 如果完全不匹配任何技能，matched_skill 设为 null，confidence 设为 0\n"
-        "- 提取用户消息中的核心关键词\n\n"
-        "仅返回 JSON 对象，不要任何其他文字：\n"
-        '{"matched_skill": "skill-name" 或 null, "confidence": 0.0-1.0, "keywords": ["词1", "词2"]}'
+        "- 优先理解消息的核心任务（写网页？查课表？搜资料？），而非零散关键词\n"
+        "- 消息中同时出现多个技能的关键词时，选核心任务对应的技能\n"
+        "- 例如「写一个课表网页」→ 核心是写网页，匹配 web-designer 而非 course-manager\n"
+        "- 例如「今天有什么课」→ 核心是查课表，匹配 course-management\n"
+        "- 明确匹配时 confidence 设为 0.8-1.0\n"
+        "- 模糊匹配时 confidence 设为 0.5-0.7\n"
+        "- 完全不匹配时 matched_skill=null, confidence=0\n"
+        "- keywords 提取消息中 2-5 个核心关键词\n\n"
+        "仅返回 JSON 对象：\n"
+        '{"matched_skill": "skill-name" | null, "confidence": 0.0-1.0, "keywords": ["词1", "词2"]}'
     )
 
     try:
@@ -114,12 +117,41 @@ def classify_intent(user_message: str, client, skills: list[dict] = None) -> dic
             response_format={"type": "json_object"},
         )
         result_text = response.choices[0].message.content or "{}"
-        # 尝试提取 JSON
-        json_match = re.search(r"\{[^{}]*\}", result_text, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group())
-        else:
-            result = json.loads(result_text)
+        result_text = result_text.strip()
+
+        # 多级降级 JSON 解析
+        json_obj = None
+
+        # 策略1：直接解析（response_format=json_object 多数情况有效）
+        try:
+            json_obj = json.loads(result_text)
+        except json.JSONDecodeError:
+            pass
+
+        # 策略2：去掉 markdown 代码块再解析
+        if json_obj is None:
+            md_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", result_text)
+            if md_match:
+                try:
+                    json_obj = json.loads(md_match.group(1))
+                except json.JSONDecodeError:
+                    pass
+
+        # 策略3：按括号范围截取
+        if json_obj is None:
+            start = result_text.find("{")
+            end = result_text.rfind("}")
+            if start >= 0 and end > start:
+                try:
+                    json_obj = json.loads(result_text[start:end + 1])
+                except json.JSONDecodeError:
+                    pass
+
+        if json_obj is None:
+            logger.warning(f"[意图分类] 无法解析 JSON，原始返回: {result_text[:300]}")
+            return {"matched_skill": None, "confidence": 0, "keywords": []}
+
+        result = json_obj
 
         matched = result.get("matched_skill")
         confidence = result.get("confidence", 0)

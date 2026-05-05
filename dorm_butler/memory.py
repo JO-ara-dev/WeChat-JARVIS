@@ -139,7 +139,7 @@ def get_memory(user_id: str, key: str = None, include_public: bool = False) -> l
                 (user_id,)
             ).fetchall()
     conn.close()
-    return [{"key": r["key"], "value": r["value"], "scope": r.get("scope", "private")} for r in rows]
+    return [{"key": r["key"], "value": r["value"], "scope": r["scope"]} for r in rows]
 
 
 def delete_memory(user_id: str, key: str):
