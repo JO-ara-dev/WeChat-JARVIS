@@ -68,6 +68,9 @@ Swarm 汇总结果 → 组装最终回复
 * **内网穿透**：通过 expose 工具（http.server + ngrok），一键将本地文件或页面生成公网链接分享。
 * **代码执行**：提供安全沙箱 Python 代码执行能力及需确认的系统命令运行环境。
 * **技能系统**：AI 自动注册新技能到 `Skills/` 目录并更新 `manifest.json`，下次同类任务直接复用。
+* **向量长期记忆**：ChromaDB 向量数据库 + Sentence Transformer 语义检索，AI 自动保存用户偏好/DDL/报错经验，下次对话自动回忆。
+* **每日早报**：每天早 08:00 自动推送（今日课程 + 临近 DDL + 天气 + LLM 口语化）。
+* **Web 仪表盘**：`http://127.0.0.1:9021` — FastAPI 后端 + WebSocket 实时日志 + ECharts 可视化。
 * **Self-Harness 防护**：HarnessGuard 监控工具调用频率，同一参数连续重复 3 次自动阻断，防止死循环。
 
 ---
@@ -124,7 +127,12 @@ Swarm 汇总结果 → 组装最终回复
 │   ├── agent_config.json         # Agent 配置中心（热更新）
 │   ├── agents.json              # 子 Agent 定义
 │   ├── harness_guard.py         # 死循环防护
+│   ├── morning_report.py        # 每日早报
 │   └── vision_processor.py      # 双 AI 视觉链路
+├── dashboard/                   # Web 仪表盘（FastAPI + WebSocket）
+│   ├── server.py                # API 端点 + 静态文件
+│   ├── log_bridge.py            # 实时日志广播
+│   └── static/index.html        # 前端（ECharts + Mermaid）
 ├── Skills/                      # 技能目录（Agent 自进化产物）
 ├── crawler.py                   # 教务系统爬虫
 ├── schema.sql                   # 数据库建表语句

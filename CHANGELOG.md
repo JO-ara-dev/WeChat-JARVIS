@@ -1,5 +1,21 @@
 # 更新日志 (Changelog)
 
+## v1.3 (2026-05-05)
+
+### 新增
+- **Web 仪表盘** (`dashboard/`) — FastAPI 后端 + WebSocket 实时日志流 + ECharts 可视化 + Mermaid 流程图
+- **向量长期记忆** (`VectorMemory`) — 基于 ChromaDB + sentence-transformers，AI 自动保存用户偏好、DDL、报错经验
+- `add_vector_memory` 工具 — LLM 主动调用，一句话总结记忆内容并永久保存
+- **每日早报** (`morning_report.py`) — 08:00 自动推送（课程 + DDL + 天气 + LLM 口语化）
+
+### 优化
+- `scheduler.py`：新增每日 08:00 早报任务 + `schedule_queue` 消息队列
+- `butler_agent.py`：向量记忆注入 System Prompt + 仪表盘后台自动启动
+- `skill_manager.py`：意图分类增加 Provider 容灾 fallback
+- `requirements.txt`：新增 chromadb / sentence-transformers / fastapi / uvicorn
+
+---
+
 ## v1.2 (2026-05-05)
 
 ### 新增
