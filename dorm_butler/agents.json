@@ -30,7 +30,7 @@
       "model": "deepseek-chat",
       "tools": ["think", "web_search", "read_file", "write_file"],
       "trigger_keywords": ["搜索", "查一下", "调研", "最新", "新闻", "资料", "百度"],
-      "max_turns": 5
+      "max_turns": 8
     },
     {
       "name": "vision-analyst",

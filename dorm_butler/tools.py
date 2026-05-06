@@ -439,16 +439,37 @@ def web_search(query: str) -> dict:
         with urllib.request.urlopen(req, timeout=10) as resp:
             html = resp.read().decode('utf-8', errors='ignore')
         
-        # 简单提取搜索结果片段
         import re
-        
-        # 提取文本内容并去重
-        text = re.sub(r'<[^>]+>', ' ', html)
-        text = re.sub(r'\s+', ' ', text)
-        # 截取前2000字符作为摘要
-        text = text[:2000]
-        
-        return {"success": True, "data": {"query": query, "snippet": text}, "message": f"搜索完成: {query}"}
+
+        # 先去除 script/style 标签（含内容），避免 JS 代码污染
+        html = re.sub(r'<script[^>]*>[\s\S]*?</script>', '', html)
+        html = re.sub(r'<style[^>]*>[\s\S]*?</style>', '', html)
+
+        # 优先提取搜索结果项 (Bing: li.b_algo > h2 > a, p)
+        results = []
+        for block in re.split(r'<li\b[^>]*class="b_algo"[^>]*>', html)[1:]:
+            title_m = re.search(r'<h2[^>]*>.*?<a[^>]*>(.*?)</a>', block, re.DOTALL)
+            desc_m = re.search(r'<p[^>]*>(.*?)</p>', block, re.DOTALL)
+            if title_m:
+                title = re.sub(r'<[^>]+>', ' ', title_m.group(1)).strip()
+                title = re.sub(r'\s+', ' ', title)
+                desc = ''
+                if desc_m:
+                    desc = re.sub(r'<[^>]+>', ' ', desc_m.group(1)).strip()
+                    desc = re.sub(r'\s+', ' ', desc)
+                results.append(f"{title}\n  {desc}"[:300])
+            if len(results) >= 5:
+                break
+
+        if results:
+            text = '\n\n'.join(results)
+        else:
+            # 兜底：纯文本提取
+            text = re.sub(r'<[^>]+>', ' ', html)
+            text = re.sub(r'\s+', ' ', text).strip()
+            text = text[:1200]
+
+        return {"success": True, "data": {"query": query, "results": results if results else None, "snippet": text}, "message": f"搜索完成({len(results)}条)"}
     except Exception as e:
         return {"success": False, "data": None, "message": f"搜索失败: {str(e)}"}
 
@@ -596,10 +617,19 @@ def run_cmd(user_id: str, command: str, description: str, confirmed: bool = Fals
     import os
     
     # 危险命令黑名单
-    dangerous = ["format", "del /f", "rm -rf", "shutdown", "reboot", "diskpart", "fdisk"]
+    dangerous = [
+        "format", "del /f", "rm -rf", "shutdown", "reboot", "diskpart", "fdisk",
+        "taskkill", "tskill", "kill", "pkill", "killall",
+    ]
     for keyword in dangerous:
         if keyword.lower() in command.lower():
             return {"success": False, "message": f"安全限制：禁止危险命令 ({keyword})"}
+
+    # 防止自杀：检测当前 PID
+    import os as _os
+    current_pid = str(_os.getpid())
+    if current_pid in command and any(k in command.lower() for k in ["kill", "taskkill", "terminat", "stop-process"]):
+        return {"success": False, "message": "安全限制：禁止操作当前进程（自杀防护）"}
     
     # 自动修正 pip 路径：确保 pip install 安装到当前 Python 环境
     cmd_stripped = command.strip()
@@ -662,16 +692,33 @@ def think(question: str, mode: str = "auto") -> dict:
     深度思考工具 - 根据任务难度选择模型
     
     mode:
-    - "fast": 快速模式，使用 deepseek-v4-flash（简单问题）
+    - "fast": 快速模式，使用 GLM-4.7-Flash（简单问题）
     - "deep": 深度模式，使用 deepseek-v4-pro（复杂问题）
     - "auto": 自动模式，根据问题复杂度自动选择
     """
-    import os
-    from openai import OpenAI
+    from .agent_manager import AgentManager
+    mgr = AgentManager(str(Path(__file__).parent / "agent_config.json"))
+    defaults = mgr.get_defaults()
     
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    base_url = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    # 从配置读取模型名
+    model_deep = defaults.get("think_model_deep", "deepseek-v4-pro")
+    model_fast = defaults.get("think_model_fast", "GLM-4.7-Flash")
+    
+    # 为每个模型创建对应提供商的客户端
+    # deep 模型 (deepseek-v4-pro) → deepseek provider
+    # fast 模型 (GLM-4.7-Flash) → zhipu provider
+    agents = mgr.get_sub_agents()
+    deep_provider = "deepseek"
+    fast_provider = "zhipu"
+    for a in agents:
+        if a.get("model") == model_deep:
+            deep_provider = a.get("provider", "deepseek")
+        if a.get("model") == model_fast:
+            fast_provider = a.get("provider", "zhipu")
+    
+    from openai import OpenAI
+    deep_client = mgr.create_client(deep_provider)
+    fast_client = mgr.create_client(fast_provider)
     
     # 自动判断模式
     if mode == "auto":
@@ -689,9 +736,9 @@ def think(question: str, mode: str = "auto") -> dict:
     
     try:
         if mode == "deep":
-            # 深度模式：使用 pro 模型，不设 timeout 让深度思考自然完成
-            response = client.chat.completions.create(
-                model="deepseek-v4-pro",
+            # 深度模式：使用推理模型，不设 timeout 让深度思考自然完成
+            response = deep_client.chat.completions.create(
+                model=model_deep,
                 messages=[{"role": "user", "content": question}],
                 max_tokens=8000,
             )
@@ -701,15 +748,15 @@ def think(question: str, mode: str = "auto") -> dict:
                 "success": True,
                 "data": {
                     "answer": answer,
-                    "model": "deepseek-v4-pro",
+                    "model": model_deep,
                     "mode": "deep"
                 },
                 "message": f"[深度思考] {answer[:100] if answer else '(思考完成但无内容)'}..."
             }
         else:
             # 快速模式：使用 flash 模型
-            response = client.chat.completions.create(
-                model="deepseek-v4-flash",
+            response = fast_client.chat.completions.create(
+                model=model_fast,
                 messages=[{"role": "user", "content": question}],
                 max_tokens=2000,
                 temperature=0.3,
@@ -720,7 +767,7 @@ def think(question: str, mode: str = "auto") -> dict:
                 "success": True,
                 "data": {
                     "answer": answer,
-                    "model": "deepseek-v4-flash",
+                    "model": model_fast,
                     "mode": "fast"
                 },
                 "message": f"[快速回答] {answer[:100]}..."
@@ -797,6 +844,18 @@ def _find_tunnel_provider() -> str:
     return None
 
 
+def _verify_tunnel_ready(url: str, retries: int = 10) -> bool:
+    """自检隧道是否就绪（HEAD 请求，最多 retries*0.5s）"""
+    for _ in range(retries):
+        try:
+            req = urllib.request.Request(url, method="HEAD")
+            urllib.request.urlopen(req, timeout=2)
+            return True
+        except Exception:
+            time.sleep(0.5)
+    return False
+
+
 def _start_cpolar_tunnel(port: int, timeout: int = 30) -> str:
     """启动 cpolar 隧道，监控日志提取公网 URL。返回 URL 或 None"""
     import subprocess as _sp
@@ -814,14 +873,16 @@ def _start_cpolar_tunnel(port: int, timeout: int = 30) -> str:
 
     start_time = time.time()
     while time.time() - start_time < timeout:
-        # cpolar 会在文件名后追加日期后缀（如 .log.20260505），用 glob 匹配
         for log_path in glob.glob(log_base + '.log*'):
             try:
                 with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
                     for line in f:
                         match = re.search(r'Tunnel established at (https?://[^\s"]+)', line)
                         if match:
-                            return match.group(1)
+                            url = match.group(1)
+                            if _verify_tunnel_ready(url):
+                                return url
+                            logger.info(f"[cpolar] 隧道就绪中...")
             except Exception:
                 pass
         time.sleep(0.5)
@@ -835,7 +896,9 @@ def _start_ngrok_tunnel(port: int, timeout: int = 30) -> str:
 
     for t in _get_tunnel_info():
         if str(port) in t.get('config', {}).get('addr', ''):
-            return t.get('public_url', '')
+            url = t.get('public_url', '')
+            if url and _verify_tunnel_ready(url, retries=3):
+                return url
 
     logger.info(f"[ngrok] 启动隧道，端口 {port}...")
     _sp.Popen(
@@ -848,7 +911,9 @@ def _start_ngrok_tunnel(port: int, timeout: int = 30) -> str:
         time.sleep(1)
         for t in _get_tunnel_info():
             if str(port) in t.get('config', {}).get('addr', ''):
-                return t.get('public_url', '')
+                url = t.get('public_url', '')
+                if url and _verify_tunnel_ready(url, retries=3):
+                    return url
 
     return None
 
@@ -1611,7 +1676,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "delegate_task",
-            "description": "将任务分发给指定的子Agent后台执行（异步，不阻塞）。调用后立即返回，用 get_pending_result 获取结果。",
+            "description": "将任务分发给指定的子Agent后台执行（异步，不阻塞）。调用后立即返回，用 get_pending_result 获取结果。CRITICAL: dispatched ≠ done，返回后只能说「已分派，正在执行」，禁止说「完成」「处理完了」",
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -80,14 +80,10 @@ def preprocess_image(image_path: str) -> str:
 # ───────────────────────── 阿里云 Wanx (眼睛) ─────────────────────────
 
 def ocr_with_wanx(image_path: str) -> str:
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    if not api_key:
-        raise RuntimeError("找不到 DashScope API Key，请检查 .env 文件！")
-
-    client = OpenAI(
-        api_key=api_key,
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    )
+    """图片 OCR 识别：使用配置的视觉模型"""
+    from .agent_manager import AgentManager
+    mgr = AgentManager(str(Path(__file__).parent / "agent_config.json"))
+    client = mgr.create_client("dashscope")
 
     with open(image_path, "rb") as f:
         image_data = base64.b64encode(f.read()).decode("utf-8")
@@ -97,7 +93,7 @@ def ocr_with_wanx(image_path: str) -> str:
 
     try:
         response = client.chat.completions.create(
-            model="qwen-vl-plus",
+            model="qwen-vl-max",
             messages=[
                 {
                     "role": "user",
@@ -119,18 +115,17 @@ def ocr_with_wanx(image_path: str) -> str:
 # ───────────────────────── DeepSeek (大脑) ─────────────────────────
 
 def analyze_with_deepseek(text: str) -> dict:
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
-        raise RuntimeError("找不到 DeepSeek API Key，请检查 .env 文件！")
-
-    client = OpenAI(
-        api_key=api_key,
-        base_url=os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1"),
-    )
+    """分析 OCR 提取的文字，识别意图和结构化信息。使用主 Agent 的模型。"""
+    from .agent_manager import AgentManager
+    mgr = AgentManager(str(Path(__file__).parent / "agent_config.json"))
+    main = mgr.get_main_agent()
+    provider = main.get("provider", "zhipu")
+    model = main.get("model", "GLM-4.5-Air")
+    client = mgr.create_client(provider)
 
     try:
         response = client.chat.completions.create(
-            model="deepseek-chat",
+            model=model,
             messages=[
                 {"role": "system", "content": DEEPSEEK_SYSTEM_PROMPT},
                 {"role": "user", "content": text},

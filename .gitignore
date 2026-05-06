@@ -39,6 +39,14 @@ bing_result.html
 love_for_yangqingci.html
 *yangqingci*
 
+# 生成工具脚本（临时产物）
+generate_ppt.py
+generate_doc.py
+generate_elegant_insults.py
+deliver_ppt.py
+render_pdf.py
+shutdown_tool.py
+
 # OS
 .DS_Store
 Thumbs.db

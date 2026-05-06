@@ -9,7 +9,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 _PROJECT_ROOT = Path(__file__).parent.parent
-_AGENTS_PATH = _PROJECT_ROOT / "dorm_butler" / "agents.json"
+_AGENTS_PATH = _PROJECT_ROOT / "dorm_butler" / "agent_config.json"
 load_dotenv(_PROJECT_ROOT / ".env")
 
 # Agent 状态追踪
@@ -61,22 +61,22 @@ SUBAGENT_SYSTEM_PROMPT = (
 
 
 def load_agents() -> list[dict]:
-    """加载 agents.json 定义"""
+    """加载 agent_config.json 中的子Agent定义"""
     if not _AGENTS_PATH.exists():
-        logger.warning(f"agents.json 不存在: {_AGENTS_PATH}")
+        logger.warning(f"agent_config.json 不存在: {_AGENTS_PATH}")
         return []
     with open(_AGENTS_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return data.get("agents", [])
+    return data.get("sub_agents", [])
 
 
 def get_defaults() -> dict:
-    """获取默认配置"""
+    """获取 agent_config.json 的默认配置"""
     if not _AGENTS_PATH.exists():
-        return {"model": "deepseek-chat", "max_turns": 5}
+        return {"max_turns": 5, "review_model": "GLM-4.7-Flash", "review_provider": "zhipu"}
     with open(_AGENTS_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return data.get("defaults", {"model": "deepseek-chat", "max_turns": 5})
+    return data.get("defaults", {"max_turns": 5, "review_model": "GLM-4.7-Flash", "review_provider": "zhipu"})
 
 
 def match_agent(keywords: list[str], user_message: str) -> dict | None:
@@ -123,28 +123,22 @@ def _get_tool_schemas(tool_names: list[str]) -> list[dict]:
 
 
 class SubAgent:
-    """子Agent执行器：独立 DeepSeek 调用，精简 prompt + 专属工具"""
+    """子Agent执行器：通过 AgentManager 创建对应提供商的客户端，精简 prompt + 专属工具"""
 
     def __init__(self, name: str, config: dict, user_id: str):
         self.name = name
         self.description = config.get("description", "")
-        self.model = config.get("model", "deepseek-chat")
+        self.model = config.get("model", "glm-4-flash")
         self.tool_names = config.get("tools", [])
         self.max_turns = config.get("max_turns", 5)
         self.user_id = user_id
+        self.provider = config.get("provider", "zhipu")
+        self.is_reasoning = "v4-pro" in self.model
 
-        # DeepSeek client
-        api_key = os.getenv("DEEPSEEK_API_KEY")
-        base_url = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
-
-        # DashScope client (Qwen VL 视觉模型)
-        if "qwen-vl" in self.model:
-            dashscope_key = os.getenv("DASHSCOPE_API_KEY")
-            self.dashscope_client = OpenAI(
-                api_key=dashscope_key,
-                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-            )
+        # 通过 AgentManager 创建对应提供商的客户端
+        from .agent_manager import AgentManager
+        mgr = AgentManager(str(Path(__file__).parent / "agent_config.json"))
+        self.client = mgr.create_client(self.provider)
 
     def execute(self, task: str, context: str = "") -> dict:
         """
@@ -167,18 +161,17 @@ class SubAgent:
             tools_used = 0
             for _ in range(self.max_turns):
                 try:
-                    # 模型路由
-                    if "qwen-vl" in self.model:
-                        call_client = self.dashscope_client
-                        call_kwargs = {"temperature": 0.3, "max_tokens": 3000, "timeout": 90}
-                    elif "v4-pro" in self.model:
-                        call_client = self.client
+                    # 根据提供商路由调用参数
+                    if self.provider == "deepseek" and self.is_reasoning:
                         call_kwargs = {"max_tokens": 8000}
+                    elif self.provider == "zhipu":
+                        call_kwargs = {"temperature": 0.3, "max_tokens": 3000, "timeout": 90}
+                    elif self.provider == "dashscope":
+                        call_kwargs = {"temperature": 0.3, "max_tokens": 3000, "timeout": 90}
                     else:
-                        call_client = self.client
                         call_kwargs = {"temperature": 0.3, "max_tokens": 3000, "timeout": 90}
 
-                    response = call_client.chat.completions.create(
+                    response = self.client.chat.completions.create(
                         model=self.model,
                         messages=messages,
                         tools=tool_schemas if tool_schemas else None,
@@ -191,8 +184,8 @@ class SubAgent:
 
                 choice = response.choices[0]
 
-                # v4-pro 推理内容在 reasoning_content 字段
-                if "v4-pro" in self.model:
+                # 推理模型（v4-pro 等）的思考内容在 reasoning_content 字段
+                if self.is_reasoning:
                     msg = choice.message
                     content = msg.content or getattr(msg, "reasoning_content", None) or ""
 
@@ -239,7 +232,7 @@ class SubAgent:
                     continue
 
                 # 模型不再调工具，返回结果
-                if "v4-pro" in self.model:
+                if self.is_reasoning:
                     msg = choice.message
                     output = msg.content or getattr(msg, "reasoning_content", None) or ""
                 else:
@@ -248,18 +241,20 @@ class SubAgent:
 
             # 达到最大轮数
             try:
-                if "qwen-vl" in self.model:
-                    fc, fkw = self.dashscope_client, {"temperature": 0.3, "max_tokens": 2000, "timeout": 60}
-                elif "v4-pro" in self.model:
-                    fc, fkw = self.client, {"max_tokens": 4000}
+                if self.is_reasoning:
+                    fkw = {"max_tokens": 4000}
+                elif self.provider == "zhipu":
+                    fkw = {"temperature": 0.3, "max_tokens": 2000, "timeout": 60}
+                elif self.provider == "dashscope":
+                    fkw = {"temperature": 0.3, "max_tokens": 2000, "timeout": 60}
                 else:
-                    fc, fkw = self.client, {"temperature": 0.3, "max_tokens": 2000, "timeout": 60}
-                response = fc.chat.completions.create(
+                    fkw = {"temperature": 0.3, "max_tokens": 2000, "timeout": 60}
+                response = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages + [{"role": "user", "content": "请总结当前任务的完成情况和结果。"}],
                     **fkw,
                 )
-                if "v4-pro" in self.model:
+                if self.is_reasoning:
                     msg = response.choices[0].message
                     output = msg.content or getattr(msg, "reasoning_content", None) or ""
                 else:
@@ -290,7 +285,7 @@ def review_result(client: OpenAI, task: str, sub_output: str) -> str | None:
 
     try:
         response = client.chat.completions.create(
-            model="deepseek-chat",
+            model="GLM-4.7-Flash",
             messages=[{"role": "user", "content": review_prompt}],
             temperature=0,
             max_tokens=150,

@@ -16,18 +16,19 @@
 
 | # | 技能 | 文件夹 | 可执行 | 触发关键词 |
 |---|------|--------|--------|------------|
-| 1 | 课表管理 | [course-management/](course-management/) | — | 课表、课程、今天什么课 |
-| 2 | 作业管理 | [assignment-management/](assignment-management/) | — | 作业、DDL、截止、任务 |
-| 3 | 视觉识别 | [vision-recognition/](vision-recognition/) | `run.py` | 识别图片、课表截图、OCR |
-| 4 | 信息获取 | [information-search/](information-search/) | — | 搜索、查一下、看看文件 |
-| 5 | 代码/命令执行 | [code-execution/](code-execution/) | — | 运行、执行、安装 |
-| 6 | 深度思考 | [deep-thinking/](deep-thinking/) | — | 分析、设计、为什么、优化 |
-| 7 | 内网穿透 | [network-expose/](network-expose/) | — | 发给我、分享、手机看 |
-| 8 | 自进化 Pipeline | [self-evolution/](self-evolution/) | — | 复杂任务、自动修复、更新自己 |
-| 9 | 记忆管理 | [memory-management/](memory-management/) | — | 记住、偏好、习惯 |
-| 10 | 教务爬虫 | [web-crawler/](web-crawler/) | `crawler.py` | 更新课表、导入教务网 |
-| 11 | 会话管理 | [session-management/](session-management/) | — | 暂停、/stop、/sessions、/session、/summary |
-| 12 | 定时提醒 | [scheduled-reminder/](scheduled-reminder/) | `scheduler.py` | 定时提醒、自动提醒、课程提醒、每晚提醒 |
+| 1 | 查询、添加、删除课程表，支持按星期筛选和周次过滤 | [course-management/](course-management/) | — | 课表, 课程, 今天什么课, 明天什么课 |
+| 2 | 管理作业任务，支持DDL追踪和待办查询 | [assignment-management/](assignment-management/) | — | 作业, DDL, ddl, 截止 |
+| 3 | 双AI视觉识别链路，识别课表/作业截图并结构化入库 | [vision-recognition/](vision-recognition/) | run.py | 识别图片, 课表截图, OCR, 识别 |
+| 4 | 联网搜索、文件读取、目录浏览等信息获取能力 | [information-search/](information-search/) | — | 搜索, 查一下, 看看文件, 搜索一下 |
+| 5 | 执行Python代码和系统命令，读写文件 | [code-execution/](code-execution/) | — | 运行, 执行, 安装, 跑一下 |
+| 6 | 深度思考模式，支持fast/deep/auto三档推理 | [deep-thinking/](deep-thinking/) | — | 分析, 设计, 为什么, 优化 |
+| 7 | 一键内网穿透，将文件/HTML暴露到公网供手机访问 | [network-expose/](network-expose/) | — | 发给我, 分享, 手机看, 暴露 |
+| 8 | 自进化Pipeline：Plan→Act→Verify→Reflect，支持自我修复和代码更新 | [self-evolution/](self-evolution/) | — | 复杂任务, 自动修复, 更新自己, 自我进化 |
+| 9 | 管理用户画像和对话记忆，记住偏好和习惯 | [memory-management/](memory-management/) | — | 记住, 偏好, 习惯, 记忆 |
+| 10 | 教务网爬虫，自动登录教务系统抓取课表数据 | [web-crawler/](web-crawler/) | crawler.py | 更新课表, 导入教务网, 爬取, 教务系统 |
+| 11 | 定时提醒课程，每晚22:00自动提醒次日课程安排 | [scheduled-reminder/](scheduled-reminder/) | scheduler.py | 定时提醒, 自动提醒, 课程提醒, 每晚提醒 |
+| 12 | 考试提醒技能 - 添加、查询、删除考试信息，并自动在指定天数前通过微信提醒用户 | [exam-reminder/](exam-reminder/) | — |  |
+| 13 | 三Agent并行文档生成技能 - 自动将内容生成真正的PPT/Word/Excel文档 | [parallel-doc-generator/](parallel-doc-generator/) | — |  |
 
 ## 目录结构规范
 

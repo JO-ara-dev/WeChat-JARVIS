@@ -3,90 +3,252 @@
     {
       "name": "course-management",
       "folder": "course-management/",
-      "trigger_keywords": ["课表", "课程", "今天什么课", "明天什么课", "周一有什么课", "周二", "周三", "周四", "周五", "添加课程", "删除课程", "调课"],
-      "tools": ["query_courses", "add_courses", "delete_courses"],
+      "trigger_keywords": [
+        "课表",
+        "课程",
+        "今天什么课",
+        "明天什么课",
+        "周一有什么课",
+        "周二",
+        "周三",
+        "周四",
+        "周五",
+        "添加课程",
+        "删除课程",
+        "调课"
+      ],
+      "tools": [
+        "query_courses",
+        "add_courses",
+        "delete_courses"
+      ],
       "executable": null,
       "description": "查询、添加、删除课程表，支持按星期筛选和周次过滤"
     },
     {
       "name": "assignment-management",
       "folder": "assignment-management/",
-      "trigger_keywords": ["作业", "DDL", "ddl", "截止", "任务", "待办", "交作业", "布置作业"],
-      "tools": ["query_tasks", "add_task", "delete_task"],
+      "trigger_keywords": [
+        "作业",
+        "DDL",
+        "ddl",
+        "截止",
+        "任务",
+        "待办",
+        "交作业",
+        "布置作业"
+      ],
+      "tools": [
+        "query_tasks",
+        "add_task",
+        "delete_task"
+      ],
       "executable": null,
       "description": "管理作业任务，支持DDL追踪和待办查询"
     },
     {
       "name": "vision-recognition",
       "folder": "vision-recognition/",
-      "trigger_keywords": ["识别图片", "课表截图", "OCR", "识别", "图片识别", "看图"],
-      "tools": ["run_code", "read_file"],
+      "trigger_keywords": [
+        "识别图片",
+        "课表截图",
+        "OCR",
+        "识别",
+        "图片识别",
+        "看图"
+      ],
+      "tools": [
+        "run_code",
+        "read_file"
+      ],
       "executable": "run.py",
       "description": "双AI视觉识别链路，识别课表/作业截图并结构化入库"
     },
     {
       "name": "information-search",
       "folder": "information-search/",
-      "trigger_keywords": ["搜索", "查一下", "看看文件", "搜索一下", "查查", "帮我搜", "上网查"],
-      "tools": ["web_search", "read_file", "list_files"],
+      "trigger_keywords": [
+        "搜索",
+        "查一下",
+        "看看文件",
+        "搜索一下",
+        "查查",
+        "帮我搜",
+        "上网查"
+      ],
+      "tools": [
+        "web_search",
+        "read_file",
+        "list_files"
+      ],
       "executable": null,
       "description": "联网搜索、文件读取、目录浏览等信息获取能力"
     },
     {
       "name": "code-execution",
       "folder": "code-execution/",
-      "trigger_keywords": ["运行", "执行", "安装", "跑一下", "执行代码", "写代码", "装个包", "pip"],
-      "tools": ["run_code", "run_cmd", "write_file", "read_file"],
+      "trigger_keywords": [
+        "运行",
+        "执行",
+        "安装",
+        "跑一下",
+        "执行代码",
+        "写代码",
+        "装个包",
+        "pip"
+      ],
+      "tools": [
+        "run_code",
+        "run_cmd",
+        "write_file",
+        "read_file"
+      ],
       "executable": null,
       "description": "执行Python代码和系统命令，读写文件"
     },
     {
       "name": "deep-thinking",
       "folder": "deep-thinking/",
-      "trigger_keywords": ["分析", "设计", "为什么", "优化", "算法", "架构", "证明", "推导", "比较", "评估", "原理", "策略"],
-      "tools": ["think"],
+      "trigger_keywords": [
+        "分析",
+        "设计",
+        "为什么",
+        "优化",
+        "算法",
+        "架构",
+        "证明",
+        "推导",
+        "比较",
+        "评估",
+        "原理",
+        "策略"
+      ],
+      "tools": [
+        "think"
+      ],
       "executable": null,
       "description": "深度思考模式，支持fast/deep/auto三档推理"
     },
     {
       "name": "network-expose",
       "folder": "network-expose/",
-      "trigger_keywords": ["发给我", "分享", "手机看", "暴露", "公网", "穿透", "网页", "链接", "发给"],
-      "tools": ["expose", "run_cmd", "write_file", "read_file"],
+      "trigger_keywords": [
+        "发给我",
+        "分享",
+        "手机看",
+        "暴露",
+        "公网",
+        "穿透",
+        "网页",
+        "链接",
+        "发给"
+      ],
+      "tools": [
+        "expose",
+        "run_cmd",
+        "write_file",
+        "read_file"
+      ],
       "executable": null,
       "description": "一键内网穿透，将文件/HTML暴露到公网供手机访问"
     },
     {
       "name": "self-evolution",
       "folder": "self-evolution/",
-      "trigger_keywords": ["复杂任务", "自动修复", "更新自己", "自我进化", "创建工具", "修复"],
-      "tools": ["plan_task", "update_todo", "get_todos", "reflect", "self_heal", "evolve_pipeline", "reuse_pipeline", "self_update", "create_tool"],
+      "trigger_keywords": [
+        "复杂任务",
+        "自动修复",
+        "更新自己",
+        "自我进化",
+        "创建工具",
+        "修复"
+      ],
+      "tools": [
+        "plan_task",
+        "update_todo",
+        "get_todos",
+        "reflect",
+        "self_heal",
+        "evolve_pipeline",
+        "reuse_pipeline",
+        "self_update",
+        "create_tool"
+      ],
       "executable": null,
       "description": "自进化Pipeline：Plan→Act→Verify→Reflect，支持自我修复和代码更新"
     },
     {
       "name": "memory-management",
       "folder": "memory-management/",
-      "trigger_keywords": ["记住", "偏好", "习惯", "记忆", "我的", "我是"],
-      "tools": ["save_memory", "get_memory", "delete_memory"],
+      "trigger_keywords": [
+        "记住",
+        "偏好",
+        "习惯",
+        "记忆",
+        "我的",
+        "我是"
+      ],
+      "tools": [
+        "save_memory",
+        "get_memory",
+        "delete_memory"
+      ],
       "executable": null,
       "description": "管理用户画像和对话记忆，记住偏好和习惯"
     },
     {
       "name": "web-crawler",
       "folder": "web-crawler/",
-      "trigger_keywords": ["更新课表", "导入教务网", "爬取", "教务系统", "学校网站", "导入课表"],
-      "tools": ["run_cmd"],
+      "trigger_keywords": [
+        "更新课表",
+        "导入教务网",
+        "爬取",
+        "教务系统",
+        "学校网站",
+        "导入课表"
+      ],
+      "tools": [
+        "run_cmd"
+      ],
       "executable": "crawler.py",
       "description": "教务网爬虫，自动登录教务系统抓取课表数据"
     },
     {
       "name": "scheduled-reminder",
       "folder": "scheduled-reminder/",
-      "trigger_keywords": ["定时提醒", "自动提醒", "课程提醒", "每晚提醒", "定时任务", "提醒我上课"],
-      "tools": ["run_cmd", "write_file", "read_file", "self_update", "run_code"],
+      "trigger_keywords": [
+        "定时提醒",
+        "自动提醒",
+        "课程提醒",
+        "每晚提醒",
+        "定时任务",
+        "提醒我上课"
+      ],
+      "tools": [
+        "run_cmd",
+        "write_file",
+        "read_file",
+        "self_update",
+        "run_code"
+      ],
       "executable": "scheduler.py",
       "description": "定时提醒课程，每晚22:00自动提醒次日课程安排"
+    },
+    {
+      "name": "exam-reminder",
+      "folder": "exam-reminder/",
+      "trigger_keywords": [],
+      "tools": [],
+      "executable": null,
+      "description": "考试提醒技能 - 添加、查询、删除考试信息，并自动在指定天数前通过微信提醒用户"
+    },
+    {
+      "name": "parallel-doc-generator",
+      "folder": "parallel-doc-generator/",
+      "trigger_keywords": [],
+      "tools": [],
+      "executable": null,
+      "description": "三Agent并行文档生成技能 - 自动将内容生成真正的PPT/Word/Excel文档"
     }
   ]
 }

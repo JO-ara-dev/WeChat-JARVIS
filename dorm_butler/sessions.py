@@ -134,13 +134,16 @@ def _generate_summary(user_id: str, session_id: int) -> str:
 
     messages_text = "\n".join([f"{r['role']}: {r['content'][:200]}" for r in reversed(rows)])
 
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    base_url = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
+    from .agent_manager import AgentManager
+    mgr = AgentManager(str(Path(__file__).parent / "agent_config.json"))
+    main = mgr.get_main_agent()
+    provider = main.get("provider", "zhipu")
+    model = main.get("model", "GLM-4.5-Air")
+    client = mgr.create_client(provider)
 
     try:
-        client = OpenAI(api_key=api_key, base_url=base_url)
         response = client.chat.completions.create(
-            model="deepseek-chat",
+            model=model,
             messages=[
                 {"role": "system", "content": "用一句中文总结以下对话内容，不超过20字。"},
                 {"role": "user", "content": messages_text},
@@ -235,6 +238,69 @@ def increment_message_count(user_id: str) -> None:
     )
     conn.commit()
     conn.close()
+
+
+def delete_session(user_id: str, session_id: int) -> dict:
+    """删除指定会话及其所有对话记录。当删除的是当前活跃会话时自动创建新会话。"""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, status FROM sessions WHERE id = ? AND user_id = ?",
+        (session_id, user_id),
+    ).fetchone()
+    if not row:
+        conn.close()
+        return {"success": False, "message": f"会话 #{session_id} 不存在"}
+
+    # 删除关联的对话记录
+    conn.execute("DELETE FROM chat_history WHERE user_id = ? AND session_id = ?",
+                 (user_id, session_id))
+    # 删除会话本身
+    conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    conn.commit()
+    conn.close()
+
+    # 如果删的是当前活跃会话，重置内存状态并创建新会话
+    if user_id in _active_sessions and _active_sessions[user_id] == session_id:
+        del _active_sessions[user_id]
+        new_sid = _create_session(user_id)
+        return {
+            "success": True,
+            "deleted_id": session_id,
+            "new_session_id": new_sid,
+            "message": f"已删除会话 #{session_id}，新会话 #{new_sid} 已开启",
+        }
+
+    return {
+        "success": True,
+        "deleted_id": session_id,
+        "message": f"已删除会话 #{session_id} 及其对话记录",
+    }
+
+
+def clear_user_sessions(user_id: str) -> dict:
+    """清空用户的所有会话和全部对话历史。"""
+    conn = _get_conn()
+    deleted_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM sessions WHERE user_id = ?", (user_id,)
+    ).fetchone()["cnt"]
+    # 先删对话记录（外键依赖）
+    conn.execute("DELETE FROM chat_history WHERE user_id = ?", (user_id,))
+    # 再删会话
+    conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+    # 清除活跃会话并创建新会话
+    if user_id in _active_sessions:
+        del _active_sessions[user_id]
+    new_sid = _create_session(user_id)
+
+    return {
+        "success": True,
+        "deleted_sessions": deleted_count,
+        "new_session_id": new_sid,
+        "message": f"已清空 {deleted_count} 个历史会话和全部对话记录，新会话 #{new_sid} 已开启",
+    }
 
 
 # 初始化

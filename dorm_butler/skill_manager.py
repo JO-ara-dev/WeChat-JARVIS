@@ -64,9 +64,9 @@ def load_manifest() -> list[dict]:
     return data.get("skills", [])
 
 
-def classify_intent(user_message: str, client, skills: list[dict] = None) -> dict:
+def classify_intent(user_message: str, client, skills: list[dict] = None, model: str = "GLM-4.7-Flash") -> dict:
     """
-    前置意图分类：用 deepseek-v4-flash 快速判断用户意图，匹配技能。
+    前置意图分类：用指定模型快速判断用户意图，匹配技能。
 
     返回: {"matched_skill": "skill-name" | None, "confidence": float, "keywords": [...]}
     """
@@ -108,7 +108,7 @@ def classify_intent(user_message: str, client, skills: list[dict] = None) -> dic
 
     try:
         response = client.chat.completions.create(
-            model="deepseek-v4-flash",
+            model=model,
             messages=[{"role": "user", "content": classification_prompt},
                         {"role": "user", "content": f"用户消息：{user_message}"}],
             temperature=0,

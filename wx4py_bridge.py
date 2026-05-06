@@ -8,7 +8,6 @@ import sys
 import threading
 import os
 import json
-import glob
 from pathlib import Path
 from queue import Queue
 
@@ -38,30 +37,10 @@ db_manager.init_db()
 
 msg_queue = Queue()
 
-# 微信图片缓存目录（可能需要根据实际情况调整）
-WECHAT_IMAGE_DIRS = [
-    os.path.expanduser("~/Documents/WeChat Files"),
-    os.path.expanduser("~/Documents/Tencent Files"),
-]
-
 
 def _format_reply(text: str) -> str:
     PREFIX = "J.V "
     return f"{PREFIX}{text}"
-
-
-def _extract_nickname(content: str) -> str | None:
-    """从消息中解析用户声明的昵称"""
-    import re
-    patterns = [
-        r'我是\s*(\S{1,10})', r'我叫\s*(\S{1,10})', r'叫我\s*(\S{1,10})',
-        r'我是\s*([\u4e00-\u9fa5a-zA-Z0-9]{1,10})',
-    ]
-    for p in patterns:
-        m = re.search(p, content)
-        if m:
-            return m.group(1)
-    return None
 
 
 def _is_image_message(content: str) -> bool:
@@ -70,57 +49,236 @@ def _is_image_message(content: str) -> bool:
     return any(marker in content for marker in image_markers)
 
 
-def _find_latest_image() -> str:
-    """查找最新的图片文件"""
+def _dump_uia_tree(control, depth: int = 0, max_depth: int = 5):
+    """诊断：打印 UIA 子树结构，用于确认 ImageControl 位置"""
+    from wx4py.core import uiautomation as _ua
+    if depth > max_depth:
+        return
+    try:
+        c = _ua.control.SetControlFromControl(control)
+        ct = c.ControlTypeName
+        cn = c.ClassName
+        nm = (c.Name or "").strip()
+        rect = c.BoundingRectangle
+        w = rect.width() if rect else 0
+        h = rect.height() if rect else 0
+        logger.info(f"[UIA] {'  ' * depth}{ct}({cn}) '{nm[:30]}' {w}x{h}")
+        for child in c.GetChildren():
+            _dump_uia_tree(child, depth + 1, max_depth)
+    except Exception:
+        pass
+
+
+def _capture_from_viewer(image_ctrl, hwnd: int) -> str | None:
+    """双击 ImageControl -> 打开查看器 -> 截图 -> 关闭。返回路径或 None。"""
     import time
-    
-    # 常见的微信图片缓存路径
-    possible_paths = []
-    
-    # 用户目录下的微信文件夹
-    for base_dir in WECHAT_IMAGE_DIRS:
-        if os.path.exists(base_dir):
-            # 递归查找图片文件
-            for ext in ["*.jpg", "*.jpeg", "*.png", "*.gif"]:
-                possible_paths.extend(glob.glob(os.path.join(base_dir, "**", ext), recursive=True))
-    
-    # 临时目录
-    temp_dir = _PROJECT_ROOT / "data"
-    for ext in ["*.jpg", "*.jpeg", "*.png", "*.gif"]:
-        possible_paths.extend(glob.glob(str(temp_dir / ext)))
-    
-    if not possible_paths:
+    import win32gui
+    from wx4py.core import uiautomation as _ua
+
+    save_path = str(_PROJECT_ROOT / "data" / "temp_image.png")
+
+    try:
+        # 1. 激活窗口
+        try:
+            win32gui.SetForegroundWindow(hwnd)
+        except Exception:
+            pass
+        time.sleep(0.2)
+
+        # 2. 双击图片打开查看器
+        try:
+            image_ctrl.DoubleClick(simulateMove=False)
+        except Exception:
+            try:
+                image_ctrl.Click(simulateMove=False)
+                time.sleep(0.3)
+                image_ctrl.Click(simulateMove=False)
+            except Exception as e:
+                logger.error(f"[图片] 点击失败: {e}")
+                return None
+
+        time.sleep(0.8)
+
+        # 3. 在整棵 UIA 树中找最大的 ImageControl（查看器里的大图）
+        big_image = None
+        max_area = 200 * 200
+        root = _ua.GetRootControl()
+        try:
+            for ctrl, _ in _ua.WalkControl(root, includeTop=True, maxDepth=10):
+                try:
+                    if ctrl.ControlTypeName != "ImageControl":
+                        continue
+                    rect = ctrl.BoundingRectangle
+                    if not rect:
+                        continue
+                    area = rect.width() * rect.height()
+                    if area > max_area:
+                        max_area = area
+                        big_image = ctrl
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        if not big_image:
+            logger.warning("[图片] 未找到查看器大图")
+            return None
+
+        # 4. 截图
+        from PIL import ImageGrab
+        rect = big_image.BoundingRectangle
+        img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
+        img.save(save_path)
+        logger.info(f"[图片] 已保存 {save_path} ({rect.width()}x{rect.height()})")
+
+        # 5. 关闭查看器
+        time.sleep(0.2)
+        try:
+            big_image.SendKeys('{Esc}')
+        except Exception:
+            pass
+
+        return save_path
+
+    except Exception as e:
+        logger.error(f"[图片] 截取失败: {e}", exc_info=True)
         return None
-    
-    # 按修改时间排序，返回最新的
-    possible_paths.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-    latest = possible_paths[0]
-    
-    # 只返回最近 30 秒内修改的文件
-    if time.time() - os.path.getmtime(latest) < 30:
-        return latest
-    
-    return None
 
 
-def _wait_for_image(timeout: int = 10) -> str:
-    """等待图片文件出现"""
+def _capture_image_from_message(raw_control, hwnd: int, group: str) -> str | None:
+    """在消息子树中找 ImageControl，然后双击 -> 查看器 -> 截图。"""
+    from wx4py.core import uiautomation as _ua
+
+    image_ctrl = None
+    ctrl_wrapper = _ua.control.SetControlFromControl(raw_control)
+    for ctrl, _ in _ua.WalkControl(ctrl_wrapper, includeTop=True, maxDepth=4):
+        try:
+            if ctrl.ControlTypeName != "ImageControl":
+                continue
+            rect = ctrl.BoundingRectangle
+            if rect and rect.width() >= 30 and rect.height() >= 30:
+                image_ctrl = ctrl
+                break
+        except Exception:
+            continue
+
+    if not image_ctrl:
+        logger.warning("[图片] 未在消息中找到 ImageControl")
+        _dump_uia_tree(raw_control)
+        return None
+
+    return _capture_from_viewer(image_ctrl, hwnd)
+
+
+def _get_message_rect(hwnd: int):
+    """获取聊天消息区域的屏幕坐标 (left, top, right, bottom)。先试 UIA，失败则按窗口比例估算。"""
+    import win32gui
+    try:
+        from wx4py.core import uiautomation as _ua
+        win_ctrl = _ua.ControlFromHandle(hwnd)
+        msg_list = None
+        try:
+            msg_list = win_ctrl.ListControl(AutomationId="chat_message_list")
+            if not msg_list.Exists(maxSearchSeconds=1):
+                msg_list = None
+        except Exception:
+            pass
+        if msg_list:
+            r = msg_list.BoundingRectangle
+            if r and r.width() > 100 and r.height() > 100:
+                logger.info(f"[图片扫描] 消息区域(UIA): {r.left},{r.top} {r.width()}x{r.height()}")
+                return (r.left, r.top, r.right, r.bottom)
+    except Exception:
+        pass
+
+    # 兜底：按窗口比例估算
+    rect = win32gui.GetWindowRect(hwnd)
+    w, h = rect[2] - rect[0], rect[3] - rect[1]
+    # 消息区域约占窗口 50%-95% 高度，宽度留 10px 边距
+    left = rect[0] + 10
+    top = rect[1] + int(h * 0.15)
+    right = rect[2] - 10
+    bottom = rect[3] - int(h * 0.08)
+    logger.info(f"[图片扫描] 消息区域(估算): {left},{top} {right-left}x{bottom-top}")
+    return (left, top, right, bottom)
+
+
+def _scan_for_image_diff(hwnd: int, timeout: float = 15.0) -> str | None:
+    """截图差异比对扫描：收到图片指令后截消息区域，对比帧找新出现的图片块。
+    返回保存路径，超时返回 None。"""
     import time
-    
-    start = time.time()
-    while time.time() - start < timeout:
-        image_path = _find_latest_image()
-        if image_path:
-            return image_path
-        time.sleep(1)
-    
+    import win32gui
+    from PIL import ImageGrab, ImageChops, Image
+
+    save_path = str(_PROJECT_ROOT / "data" / "temp_image.png")
+    MIN_DIFF_AREA = 15000  # 最小差异像素数，过滤文字变化
+    INTERVAL = 0.3
+
+    try:
+        win32gui.SetForegroundWindow(hwnd)
+    except Exception:
+        pass
+    time.sleep(0.3)
+
+    msg_rect = _get_message_rect(hwnd)
+    logger.info(f"[图片扫描(diff)] 开始监控 (min_diff={MIN_DIFF_AREA}px, interval={INTERVAL}s)")
+
+    try:
+        baseline = ImageGrab.grab(bbox=msg_rect)
+    except Exception as e:
+        logger.error(f"[图片扫描(diff)] 截图失败: {e}")
+        return None
+
+    deadline = time.time() + timeout
+
+    while time.time() < deadline:
+        time.sleep(INTERVAL)
+
+        try:
+            frame = ImageGrab.grab(bbox=msg_rect)
+        except Exception:
+            continue
+
+        try:
+            diff = ImageChops.difference(baseline, frame)
+            bbox = diff.getbbox()
+        except Exception:
+            baseline = frame
+            continue
+
+        if bbox is None:
+            # 无变化
+            continue
+
+        diff_area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+        if diff_area < MIN_DIFF_AREA:
+            # 变化太小（纯文字）→ 忽略，更新基线
+            baseline = frame
+            continue
+
+        logger.info(f"[图片扫描(diff)] 检测到变化区域: {bbox} ({diff_area}px)")
+
+        # 抠出新图片区域（用当前帧的变化区域）
+        image_region = frame.crop(bbox)
+        image_region.save(save_path)
+        logger.info(f"[图片扫描(diff)] 已保存 {save_path} ({bbox[2]-bbox[0]}x{bbox[3]-bbox[1]})")
+        return save_path
+
+    logger.info(f"[图片扫描(diff)] 超时 {timeout}s，未检测到图片")
     return None
 
 
 def _handle_session_cmd(user_id: str, content: str) -> str | None:
-    """处理会话管理指令，返回回复文本或 None（非会话指令）"""
+    """处理会话管理指令"""
     stripped = content.strip()
-    # 暂停
+    # /new — 开启新会话
+    if stripped == "/new":
+        result = _sessions.archive_session(user_id)
+        return (
+            f"已结束旧会话 #{result['old_id']}\n"
+            f"新会话 #{result['new_id']} 已开启 ｜ /sessions 查看历史"
+        )
+    # /stop — 同 /new
     if stripped in ("暂停", "/stop"):
         result = _sessions.archive_session(user_id)
         return (
@@ -128,18 +286,32 @@ def _handle_session_cmd(user_id: str, content: str) -> str | None:
             f"摘要：{result['summary']}\n"
             f"新会话 #{result['new_id']} 已开启 ｜ /sessions 查看历史"
         )
-    # 列出会话
+    # /clear — 清空所有对话记录
+    if stripped == "/clear":
+        result = _sessions.clear_user_sessions(user_id)
+        return result["message"]
+    # /delete <id> — 删除指定会话
+    if stripped.startswith("/delete "):
+        try:
+            sid = int(stripped.split()[1])
+        except (IndexError, ValueError):
+            return "用法：/delete <会话ID>"
+        result = _sessions.delete_session(user_id, sid)
+        return result["message"]
+    # /sessions — 列出历史会话
     if stripped == "/sessions":
         sessions_list = _sessions.list_sessions(user_id)
         if not sessions_list:
-            return "还没有历史会话记录"
+            return "还没有历史会话记录 ｜ /new 开始新对话"
         lines = ["📋 历史会话："]
         for s in sessions_list:
             marker = "🟢" if s["status"] == "active" else "📁"
             summary = s["summary"][:30] if s["summary"] else "（无摘要）"
             lines.append(f"  {marker} #{s['id']} {summary} | {s['created_at'][:16]}")
+        lines.append("")
+        lines.append("回复 /session <id> 切换 ｜ /delete <id> 删除 ｜ /new 新对话 ｜ /clear 清空")
         return "\n".join(lines)
-    # 切换会话
+    # /session <id> — 切换会话
     if stripped.startswith("/session "):
         try:
             sid = int(stripped.split()[1])
@@ -149,7 +321,7 @@ def _handle_session_cmd(user_id: str, content: str) -> str | None:
         if result["success"]:
             return f"已切换到会话 #{sid} | 摘要：{result['summary']}"
         return result["message"]
-    # 总结
+    # /summary — 总结当前会话
     if stripped == "/summary":
         summary = _sessions.get_session_summary(user_id)
         return f"📝 当前会话摘要：{summary}"
@@ -168,13 +340,40 @@ def process_worker(action_emitter):
 
             group, content = item
 
-            # 自动注册用户
-            db_manager.register_user(group, "")
-            # 从消息中解析昵称声明
-            nickname = _extract_nickname(content)
-            if nickname:
-                db_manager.register_user(group, nickname)
-                db_manager.set_nickname(group, nickname)
+            # ── 图片主动扫描 ──
+            if content.startswith("__IMAGE_SCAN__::"):
+                scan_hwnd = int(content.split("::", 1)[1])
+                action_emitter(ReplyAction(group=group, content="J.V 收到，正在等待图片..."))
+                save_path = _scan_for_image_diff(scan_hwnd, timeout=15)
+                if save_path:
+                    # 转入 OCR 流程
+                    content = f"__IMAGE__::{save_path}"
+                else:
+                    action_emitter(ReplyAction(group=group, content="J.V 未检测到图片，请重新发送并 @我 说'识别图片'"))
+                    msg_queue.task_done()
+                    continue
+
+            # ── 图片消息处理（被动检测或扫描后转入）──
+            if content.startswith("__IMAGE__::"):
+                image_path = content.split("::", 1)[1]
+                logger.info(f"[处理] 图片识别中: {image_path}")
+                try:
+                    from dorm_butler.vision_processor import process_image
+                    ocr_result = process_image(image_path, user_id=group)
+                    ocr_text = ocr_result.get("extracted_text", "").strip()
+                    if ocr_text:
+                        content = f"[图片OCR结果]\n{ocr_text}"
+                        logger.info(f"[OCR] 识别成功 ({len(ocr_text)} 字)")
+                    else:
+                        logger.warning(f"[OCR] 识别结果为空")
+                        action_emitter(ReplyAction(group=group, content="J.V 图片已收到，但未识别到文字"))
+                        msg_queue.task_done()
+                        continue
+                except Exception as e:
+                    logger.error(f"[OCR] 识别失败: {e}")
+                    action_emitter(ReplyAction(group=group, content=f"J.V 图片识别失败: {str(e)[:50]}"))
+                    msg_queue.task_done()
+                    continue
 
             # 会话指令拦截（不进入 Agent）
             session_reply = _handle_session_cmd(group, content)
@@ -193,17 +392,18 @@ def process_worker(action_emitter):
                     action_emitter(ReplyAction(group=group, content=_format_reply(msg)))
 
                 gen = butler_agent.chat(content, user_id=group, progress_callback=on_progress)
-                final_reply = None
+                prev_chunk = None
                 for chunk in gen:
                     if chunk is None:
                         continue
-                    # 判断是否为进度更新（以 emoji 开头）
-                    progress_markers = ("📋", "✅", "🔄", "⏳", "❌", "📊")
-                    if chunk.strip().startswith(progress_markers):
-                        logger.info(f"[进度] {chunk[:80]}")
-                        action_emitter(ReplyAction(group=group, content=f"J.V {chunk}"))
-                    else:
-                        final_reply = chunk
+                    if prev_chunk is not None:
+                        # 非最后一条 → 进度更新
+                        logger.info(f"[进度] {prev_chunk[:80]}")
+                        action_emitter(ReplyAction(group=group, content=f"J.V {prev_chunk}"))
+                    prev_chunk = chunk
+
+                # 最后一条 yield 一定是最终回复
+                final_reply = prev_chunk
 
                 if final_reply:
                     reply = _format_reply(final_reply)
@@ -221,6 +421,12 @@ def process_worker(action_emitter):
 
 
 def main():
+    import ctypes
+    ES_CONTINUOUS = 0x80000000
+    ES_SYSTEM_REQUIRED = 0x00000001
+    ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+    logger.info("[系统] 已禁止系统自动休眠")
+
     from wx4py import WeChatClient
     from wx4py.features.messaging import MessageHandler, MessageEvent
     from wx4py.features.messaging.processor import ReplyAction
@@ -246,22 +452,39 @@ def main():
             if "贾维斯" in stripped[:20] and any(kw in stripped[:80] for kw in ["老大", "作业", "课表"]):
                 return None
 
+            # 图片扫描请求（无论是否艾特都检测）
+            _IMAGE_SCAN_KW = ["识别图片", "识别这张图", "看看这张图", "图片识别",
+                              "识别一下", "识别上面", "识别这个", "看图识", "识别这",
+                              "图片分析", "分析图片", "读图", "提取图片"]
+            if any(kw in stripped for kw in _IMAGE_SCAN_KW):
+                logger.info(f"[收到] {group}: 图片扫描请求")
+                msg_queue.put((group, f"__IMAGE_SCAN__::{wx.window.hwnd}"))
+                return None
+
             # 被艾特：直接处理
             if is_at_me:
-                # 检测图片消息
                 if _is_image_message(stripped):
                     logger.info(f"[收到] {group} (at=True): [图片消息]")
-                    
-                    # 提示用户发送图片文件
-                    msg_queue.put((group, "老板，您发的图片我这边暂时无法直接接收 😅\n\n"
-                                  "请直接发送图片文件（不要引用），或者把图片保存到本地后告诉我文件路径，小的立马帮您识别！📸"))
+                    image_path = _capture_image_from_message(event.raw, wx.window.hwnd, group)
+                    if image_path:
+                        msg_queue.put((group, f"__IMAGE__::{image_path}"))
+                    else:
+                        msg_queue.put((group, "无法获取图片，请重新发送或发送图片文件"))
                 else:
                     logger.info(f"[收到] {group} (at=True): {content[:80]}")
                     msg_queue.put((group, content))
                 return None
 
+            # 未被艾特：检测图片
+            if _is_image_message(stripped):
+                logger.info(f"[收到] {group} (keyword): [图片消息]")
+                image_path = _capture_image_from_message(event.raw, wx.window.hwnd, group)
+                if image_path:
+                    msg_queue.put((group, f"__IMAGE__::{image_path}"))
+                return None
+
             # 未被艾特：包含关键词才处理
-            keywords = ["课表", "作业", "课程", "这门课", "DDL", "ddl", "贾维斯", "jarvis", "Jarvis", "JARVIS", "暂停", "/stop", "/sessions", "/session", "/summary"]
+            keywords = ["课表", "作业", "课程", "这门课", "DDL", "ddl", "贾维斯", "jarvis", "Jarvis", "JARVIS", "暂停", "/stop", "/new", "/clear", "/delete", "/sessions", "/session", "/summary"]
             if any(kw in content for kw in keywords):
                 logger.info(f"[收到] {group} (keyword): {content[:80]}")
                 msg_queue.put((group, content))
@@ -269,7 +492,6 @@ def main():
             return None
 
     GROUPS = ["测试"]
-    # 手动指定机器人在各群的昵称，用于判断是否被 @
     GROUP_NICKNAMES = {"测试": "贾维斯"}
 
     logger.info("=" * 50)
@@ -280,8 +502,19 @@ def main():
         logger.info("[wx4py] 已连接微信")
         logger.info(f"[wx4py] 监听群聊: {GROUPS}")
 
-        # 预打开群聊子窗口：emoji-only 群名无法通过搜索框输入，
-        # 直接从左侧会话列表定位并双击打开，监听器启动时可直接复用
+        # 启动时自动归档旧会话，防止重启后续跑上次没完成的任务
+        for group in GROUPS:
+            try:
+                _sessions.archive_session(group)
+            except Exception:
+                pass
+        logger.info("[会话] 已归档旧会话，新对话从零开始")
+
+        logger.info("[就绪] 贾维斯为老大服务！")
+
+        import time
+
+        # 预打开群聊子窗口
         from wx4py.features.messaging.listener import (
             _find_session_item, _find_window_by_title, _double_click_control,
         )
@@ -297,11 +530,80 @@ def main():
             except Exception:
                 logger.debug(f"[窗口] 跳过预打开: {group}", exc_info=True)
 
-        logger.info("[就绪] 贾维斯为老大服务！")
-
         handler = ButlerHandler()
         processor = wx.process_groups(GROUPS, [handler], block=False, group_nicknames=GROUP_NICKNAMES)
         handler_ref = handler
+
+        # Monkey-patch _poll_session：窗口最小化时静默恢复再扫 UIA
+        # Monkey-patch _read_visible_items：检测 Name 为空的图片消息
+        if hasattr(processor, '_listener'):
+            import win32gui, win32con
+            import wx4py.features.messaging.listener as _lm
+            from wx4py.core import uiautomation as _ua
+
+            # --- patch 1: _poll_session ---
+            _poll_fn = processor._listener._poll_session
+            _RESTORE_COOLDOWN = 30
+            _last_restore = {}
+
+            def _poll_with_activate(self, session):
+                hwnd = session.hwnd
+                was_iconic = win32gui.IsIconic(hwnd) if hwnd else False
+                if was_iconic:
+                    now = time.time()
+                    last = _last_restore.get(hwnd, 0)
+                    if now - last <= _RESTORE_COOLDOWN:
+                        return None
+                    try:
+                        win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
+                        time.sleep(0.15)
+                        _last_restore[hwnd] = now
+                    except Exception:
+                        pass
+                return _poll_fn(session)
+
+            processor._listener._poll_session = _poll_with_activate.__get__(
+                processor._listener, type(processor._listener)
+            )
+            logger.info("[patch] 已启用最小化窗口 UIA 刷新（30s 冷却）")
+
+            # --- patch 2: _read_visible_items ---
+            _orig_read = _lm._read_visible_items
+
+            def _read_with_images(msg_list):
+                items = _orig_read(msg_list)
+                for child in _lm._safe_children(msg_list):
+                    name = _lm._safe_text(child, "Name").strip()
+                    if name:
+                        continue
+                    cls = _lm._safe_text(child, "ClassName")
+                    if cls not in _lm.MESSAGE_CLASSES:
+                        continue
+                    has_image = False
+                    try:
+                        for sub, _d in _ua.WalkControl(child, includeTop=True, maxDepth=4):
+                            try:
+                                if sub.ControlTypeName == "ImageControl":
+                                    has_image = True
+                                    break
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    if has_image:
+                        rid = _lm._safe_runtime_id(child)
+                        if not any(item.runtime_id == rid for item in items):
+                            items.append(_lm._VisibleItem(
+                                kind="message",
+                                name="[图片]",
+                                class_name=cls,
+                                runtime_id=rid,
+                                control=child,
+                            ))
+                return items
+
+            _lm._read_visible_items = _read_with_images
+            logger.info("[patch] 已启用图片消息 Name 为空时的检测")
 
         worker = threading.Thread(
             target=process_worker,
@@ -311,12 +613,14 @@ def main():
         worker.start()
 
         try:
-            import time
             while processor.is_running:
                 time.sleep(1)
         except KeyboardInterrupt:
             logger.info("[退出] 贾维斯下班了！")
             msg_queue.put(None)
+        finally:
+            ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+            logger.info("[系统] 已恢复系统休眠策略")
 
 
 if __name__ == "__main__":

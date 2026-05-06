@@ -112,15 +112,69 @@ def _query_tomorrow_courses() -> str:
         return None
 
 
+def _check_exam_reminders(user_id: str) -> str:
+    """检查考试提醒，返回提醒消息（如果有）"""
+    try:
+        sys.path.insert(0, _get_project_root())
+        from dorm_butler import db_manager
+
+        # 从 memory 表读取所有 exam_ 开头的记忆
+        conn = db_manager.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT key, value FROM memory WHERE user_id=? AND key LIKE 'exam_%'",
+            (user_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        today = datetime.date.today()
+        reminders = []
+
+        for key, value in rows:
+            try:
+                exam_info = json.loads(value)
+                exam_date_str = exam_info.get("date", "")
+                reminder_days = exam_info.get("reminder_days", 3)
+                course_name = exam_info.get("course", key.replace("exam_", ""))
+                start_time = exam_info.get("start_time", "")
+                end_time = exam_info.get("end_time", "")
+
+                if not exam_date_str:
+                    continue
+
+                exam_date = datetime.datetime.strptime(exam_date_str, "%Y-%m-%d").date()
+                remind_date = exam_date - datetime.timedelta(days=reminder_days)
+
+                if today == remind_date:
+                    time_str = f"{start_time}-{end_time}" if start_time and end_time else ""
+                    msg_parts = [f"📢 考试提醒！"]
+                    msg_parts.append(f"📚 课程：{course_name}")
+                    msg_parts.append(f"📅 日期：{exam_date_str}（{reminder_days}天后）")
+                    if time_str:
+                        msg_parts.append(f"⏰ 时间：{time_str}")
+                    msg_parts.append(f"💪 老大加油，抓紧复习！")
+                    reminders.append("\n".join(msg_parts))
+            except (json.JSONDecodeError, ValueError, KeyError) as e:
+                logger.warning(f"[定时任务] 解析考试记忆失败: {key} -> {e}")
+                continue
+
+        return "\n\n".join(reminders) if reminders else None
+
+    except Exception as e:
+        logger.error(f"[定时任务] 检查考试提醒失败: {e}")
+        return None
+
+
 def _nightly_reminder():
-    """每晚 22:00 执行的定时任务"""
-    logger.info("[定时任务] 执行晚间课程提醒...")
+    """每晚 22:00 执行的定时任务（课程提醒 + 考试提醒）"""
+    logger.info("[定时任务] 执行晚间提醒...")
 
     try:
         sys.path.insert(0, _get_project_root())
         from dorm_butler import db_manager
 
-        # 获取所有用户（目前从 memory 表获取活跃用户）
+        # 获取所有用户
         users = db_manager.get_all_users()
         if not users:
             logger.info("[定时任务] 没有活跃用户，跳过提醒")
@@ -131,12 +185,20 @@ def _nightly_reminder():
             if not user_id:
                 continue
 
-            msg = _query_tomorrow_courses()
-            if msg:
-                _send_wechat_msg(user_id, msg)
+            # 1. 课程提醒
+            course_msg = _query_tomorrow_courses()
+            if course_msg:
+                _send_wechat_msg(user_id, course_msg)
                 logger.info(f"[定时任务] 已向 {user_id} 发送明日课程提醒")
-            else:
-                logger.info(f"[定时任务] {user_id} 明日无课，跳过提醒")
+
+            # 2. 考试提醒
+            exam_msg = _check_exam_reminders(user_id)
+            if exam_msg:
+                _send_wechat_msg(user_id, exam_msg)
+                logger.info(f"[定时任务] 已向 {user_id} 发送考试提醒")
+
+            if not course_msg and not exam_msg:
+                logger.info(f"[定时任务] {user_id} 明日无课且无考试提醒，跳过")
     except Exception as e:
         logger.error(f"[定时任务] 执行失败: {e}")
 

@@ -62,11 +62,13 @@ SYSTEM_PROMPT_TEMPLATE = (
     "- **你不是执行者，你是指挥官**。收到任何需要干活的消息，第一反应永远是：拆解 → 分派给子Agent → 收集结果 → 汇总回复\n"
     "- **必须分派的任务**：联网搜索、写代码、生成文件/网页、设计UI、图片分析、复杂计算、搭建服务 → 一律用 delegate_task 或 swarm_execute 分派给子Agent，不许亲自调 web_search/run_code/write_file/run_cmd 等执行工具\n"
     "- **可以亲自做的**：纯文字回复（闲聊/问候/答疑）、查已有数据库（query_courses/query_tasks/get_memory）、记住用户信息（save_memory/memory-management 工具）、分派协调工具（plan_task/delegate_task/swarm_execute/get_pending_result）\n"
-    "- delegate_task 是异步的：调用后立即返回「已分派」，不阻塞。你可以继续和用户对话\n"
-    "- 用户每次发新消息时，先调 get_pending_result 检查是否有子Agent完成了任务\n"
+    "- delegate_task 是异步的：调用后立即返回「已分派」，**dispatched ≠ done**\n"
+    "- **铁律**：delegate_task 返回后，直接且只能回复用户「已分派给 {agent}，正在后台执行中」。禁止说「完成」「处理完了」\n"
+    "- **防幻觉铁律**：光说「已分派」没用，必须在工具调用里出现 delegate_task 才算真正分派。禁止用文字描述替代实际操作。\n"
+    "- 用户后续每次发新消息时，第一步永远是先调 get_pending_result 检查结果\n"
     "- 有结果 → 审核内容（非空？符合要求？有产出？）→ 通过则输出给用户\n"
-    "- 无结果 → 告诉用户「仍在执行」，然后继续处理用户当前消息\n"
-    "- 多Agent协作：需要多个Agent并行时，调用 swarm_execute 一次性编排\n"
+    "- 无结果 → 告诉用户「仍在执行中」，然后继续处理用户当前消息\n"
+    "- 多Agent并行：需要多个Agent同时干活时，调用 swarm_execute 一次性编排\n"
     "  格式：swarm_execute(workflow_json='{\"parallel\":[...],\"final\":{...},\"interop\":true}')\n"
     "- 可用子Agent：web-designer / code-executor / course-manager / researcher / vision-analyst / system-admin\n\n"
     "## 核心工作模式：Plan → Confirm → Act → Verify → Reflect\n"
@@ -92,7 +94,8 @@ SYSTEM_PROMPT_TEMPLATE = (
     "- 这是 Windows 环境，用 cmd 命令不是 Linux 命令（dir 不是 ls，echo %cd% 不是 pwd）\n"
     "- 持续运行的服务（http.server 等）必须传 background=true，否则会卡住\n"
     "- 短命令（pip install、dir 等）不传 background，查看输出\n"
-    "- pip install 会自动修正到当前 Python 环境，你正常写 pip install xxx 即可\n\n"
+    "- pip install 会自动修正到当前 Python 环境，你正常写 pip install xxx 即可\n"
+    "- 绝对禁止 kill/taskkill 等终止进程的操作，系统已拦截。需要重启服务时只停端口，不要杀进程\n\n"
     "## 文件分享规则\n"
     "- 用户说「发给我」「分享」「手机看」→ 用 expose 工具一键暴露到公网\n"
     "- expose 会自动启动 http.server + ngrok 隧道，返回公网链接，直接把链接回复给用户\n"
@@ -241,22 +244,42 @@ def _compress_messages(messages: list, keep_recent: int = 8) -> list:
     return messages
 
 
+# ── AgentManager 单例 ──
+from .agent_manager import AgentManager
+_AGENT_CFG_PATH = str(Path(__file__).parent / "agent_config.json")
+_agent_mgr = None
+
+def _get_agent_mgr():
+    global _agent_mgr
+    if _agent_mgr is None:
+        _agent_mgr = AgentManager(_AGENT_CFG_PATH)
+    return _agent_mgr
+
+
 def _get_client() -> OpenAI:
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    base_url = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
-    return OpenAI(api_key=api_key, base_url=base_url)
+    """从 AgentManager 获取主 Agent 使用的提供商客户端"""
+    mgr = _get_agent_mgr()
+    main = mgr.get_main_agent()
+    provider = main.get("provider", "zhipu")
+    return mgr.create_client(provider)
+
+
+def _get_main_model() -> str:
+    """从 AgentManager 获取主 Agent 的模型名"""
+    return _get_agent_mgr().get_main_agent().get("model", "GLM-4.5-Air")
 
 
 def _classify_intent(user_message: str) -> dict:
-    """前置意图分类：用 deepseek-v4-flash 匹配技能。
+    """前置意图分类：用 AgentManager 配置的意图模型匹配技能。
     返回 {"matched_skill": str|None, "confidence": float, "keywords": [...]}
     """
-    client = OpenAI(
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
-        base_url=os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1"),
-    )
+    mgr = _get_agent_mgr()
+    main = mgr.get_main_agent()
+    provider = main.get("intent_provider", "zhipu")
+    model = main.get("intent_model", "GLM-4.7-Flash")
+    client = mgr.create_client(provider)
     skills = load_manifest()
-    return classify_intent(user_message, client, skills)
+    return classify_intent(user_message, client, skills, model=model)
 
 
 def _build_system_prompt(user_id: str, skill_instructions: str = "", skill_name: str = "") -> str:
@@ -358,6 +381,7 @@ def chat(user_message: str, user_id: str = "default", image_text: str = None, pr
     progress_callback(msg) 在长时间操作（如深度思考）时被调用，用于即时通知用户
     """
     client = _get_client()
+    main_model = _get_main_model()
 
     # ── 自动注册当前用户 ──
     from . import db_manager
@@ -406,7 +430,7 @@ def chat(user_message: str, user_id: str = "default", image_text: str = None, pr
     for _ in range(20):
         try:
             response = client.chat.completions.create(
-                model="deepseek-chat",
+                model=main_model,
                 messages=messages,
                 tools=ALL_TOOLS,
                 tool_choice="auto",
