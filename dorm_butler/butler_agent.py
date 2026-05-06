@@ -25,6 +25,7 @@ from .tools import TOOLS_SCHEMA as BASE_TOOLS, TOOLS_MAP as BASE_TOOLS_MAP
 from .memory import (
     TOOLS_SCHEMA as MEMORY_TOOLS, TOOLS_MAP as MEMORY_TOOLS_MAP,
     add_message, get_history, get_memory, save_memory as _save_memory_raw,
+    _get_vector_memory,
 )
 from .skill_manager import load_manifest, classify_intent, load_skill_instructions
 from .harness_guard import before_tool, after_tool, clear_user
@@ -45,6 +46,7 @@ ALL_TOOLS_MAP = {**BASE_TOOLS_MAP, **MEMORY_TOOLS_MAP}
 
 SYSTEM_PROMPT_TEMPLATE = (
     "你是「贾维斯(J.V)」，一个可以自我进化的大学宿舍 AI 助手。\n\n"
+    "{vector_memory}"
     "## 技能优先工作流\n"
     "- 每次收到用户消息，系统已自动进行意图分类并匹配技能\n"
     "- 如果系统提示中标注了「🎯 当前匹配技能」，请严格遵循该技能的 SKILL.md 指令执行\n"
@@ -121,10 +123,13 @@ SYSTEM_PROMPT_TEMPLATE = (
     "- 智能思考（根据问题难度选择模型）\n"
     "- 记住用户的偏好和习惯\n"
     "- 一键内网穿透（expose），把本地文件暴露到公网供手机访问\n\n"
+    "## 长期记忆能力\n"
+    "- 当用户透露个人偏好（饮食/习惯）、重要时间节点（DDL/考试）或技术报错经验时，必须主动调用 add_vector_memory 工具将其总结并永久保存\n"
+    "- category 参数根据内容性质选填：'偏好'、'时间节点' 或 '报错经验'；content 参数用一句话总结核心信息，去除无关上下文\n\n"
     "## 系统信息\n"
     "- 运行环境：Windows（命令用 cmd/PowerShell，不是 Linux）\n"
     "- 数据库路径：data/butler.db（SQLite）\n"
-    "- 工作目录：D:\\code\\opencode\\微信 AI 牛马管家\n\n"
+    "- 工作目录：{project_root}\n\n"
     "## 图片处理规则\n"
     "- 收到图片文件路径后，调用 run_code 读取图片并分析\n"
     "- 如果是课表，调用 add_courses 工具保存\n"
@@ -282,7 +287,7 @@ def _classify_intent(user_message: str) -> dict:
     return classify_intent(user_message, client, skills, model=model)
 
 
-def _build_system_prompt(user_id: str, skill_instructions: str = "", skill_name: str = "") -> str:
+def _build_system_prompt(user_id: str, skill_instructions: str = "", skill_name: str = "", vector_memories: list = None) -> str:
     """构建包含用户记忆和技能指令的 system prompt"""
     from .tools import get_current_week
     memories = get_memory(user_id)
@@ -291,6 +296,18 @@ def _build_system_prompt(user_id: str, skill_instructions: str = "", skill_name:
     else:
         memory_text = "（暂无）"
 
+    # 构建向量检索记忆文本（插在核心人设之后、能力指令之前）
+    if vector_memories:
+        lines = []
+        for m in vector_memories:
+            meta = m.get("metadata", {})
+            cat = meta.get("category", "")
+            prefix = f"[{cat}] " if cat else ""
+            lines.append(f"- {prefix}{m['content']}")
+        vector_text = "[历史记忆：基于您的提问，我回想起以下信息：\n" + "\n".join(lines) + "\n]\n\n"
+    else:
+        vector_text = ""
+
     current_week = get_current_week()
     week_info = f"当前是第 {current_week} 周" if current_week > 0 else "未设置学期起始日期"
     now = datetime.datetime.now()
@@ -298,7 +315,7 @@ def _build_system_prompt(user_id: str, skill_instructions: str = "", skill_name:
     weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
     weekday = weekday_names[now.weekday()]
 
-    base = SYSTEM_PROMPT_TEMPLATE.replace("{user_memory}", memory_text) + f"\n## 当前状态\n- 现在时间：{today}（{weekday}）\n- {week_info}\n"
+    base = SYSTEM_PROMPT_TEMPLATE.replace("{vector_memory}", vector_text).replace("{user_memory}", memory_text).replace("{project_root}", str(_PROJECT_ROOT)) + f"\n## 当前状态\n- 现在时间：{today}（{weekday}）\n- {week_info}\n"
 
     # 注入当前用户身份
     from . import db_manager
@@ -341,7 +358,7 @@ def _execute_tool(tool_name: str, arguments: dict, user_id: str, progress_callba
             # 深度思考前通知用户
             if tool_name == "think" and arguments.get("mode") == "deep" and progress_callback:
                 progress_callback("🧠 模型正在深度思考中，请耐心等待（预计需要 2~5 分钟）...")
-            if tool_name in ("save_memory", "get_memory", "delete_memory", "run_code", "run_cmd", "expose", "plan_task", "update_todo", "get_todos", "reflect", "self_heal", "evolve_pipeline", "reuse_pipeline", "self_update", "propose_skill", "register_skill", "add_task", "query_tasks", "delete_task", "set_nickname", "resolve_user", "identify_me", "delegate_task", "get_pending_result", "swarm_execute", "list_agents"):
+            if tool_name in ("save_memory", "get_memory", "delete_memory", "run_code", "run_cmd", "expose", "plan_task", "update_todo", "get_todos", "reflect", "self_heal", "evolve_pipeline", "reuse_pipeline", "self_update", "propose_skill", "register_skill", "add_task", "query_tasks", "delete_task", "set_nickname", "resolve_user", "identify_me", "delegate_task", "get_pending_result", "swarm_execute", "list_agents", "add_vector_memory"):
                 arguments.pop("user_id", None)
                 if tool_name == "delegate_task":
                     result = func(user_id=user_id, progress_callback=progress_callback, **arguments)
@@ -405,7 +422,11 @@ def chat(user_message: str, user_id: str = "default", image_text: str = None, pr
         )
         logger.info(f"[技能匹配] 未命中 (best={matched_skill}, confidence={confidence})")
 
-    system_prompt = _build_system_prompt(user_id, skill_instructions, skill_name)
+    # 向量记忆检索（基于当前消息检索相关长期记忆）
+    vm = _get_vector_memory()
+    vector_memories = vm.query_memory(user_message)
+
+    system_prompt = _build_system_prompt(user_id, skill_instructions, skill_name, vector_memories)
 
     # ── 第二步：主 Agent 对话 ──
     history = get_history(user_id, limit=10)
@@ -524,14 +545,30 @@ def chat(user_message: str, user_id: str = "default", image_text: str = None, pr
 #   规则：新增后台服务/定时任务/监听器，在此用 try/except 包裹
 # ══════════════════════════════════════════════════
 
+def _start_dashboard():
+    try:
+        import uvicorn
+        from dashboard.server import app
+        uvicorn.run(app, host="127.0.0.1", port=9021, log_level="info")
+    except Exception as e:
+        logger.warning(f"⚠️ Web仪表盘启动失败: {e}")
+
 def _init_modules():
     """模块初始化：集中管理所有启动时的副作用"""
-    # 定时任务调度器（每晚22:00提醒次日课程）
+    # 定时任务调度器（08:00早报 + 22:00晚间提醒）
     try:
         from .scheduler import start_scheduler
         start_scheduler()
         logger.info("✅ 定时任务调度器已启动")
     except Exception as e:
         logger.warning(f"⚠️ 定时任务调度器启动失败: {e}")
+
+    # Web 仪表盘（FastAPI + WebSocket，后台 daemon 线程）
+    import threading
+    threading.Thread(target=_start_dashboard, daemon=True).start()
+    logger.info("✅ Web仪表盘已启动 → http://127.0.0.1:9021")
+    import webbrowser, time
+    time.sleep(1)
+    webbrowser.open("http://127.0.0.1:9021")
 
 _init_modules()

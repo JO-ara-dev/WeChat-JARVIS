@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>贾维斯 (J.V) · 仪表盘</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+/* ═════════════ Matrix Green / 赛博朋克 主题 ═════════════ */
+:root {
+  --bg: #0a0a0a;
+  --panel-bg: #0d1117;
+  --border: #1a3a2a;
+  --green: #00ff41;
+  --green-dim: #0b3d1f;
+  --green-bright: #39ff14;
+  --text: #b3ffb3;
+  --text-dim: #4a7a5a;
+  --accent: #0df0a0;
+  --danger: #ff4444;
+  --warning: #ffaa00;
+  --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+  --font-sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+body::before {
+  content: '';
+  position: fixed; top:0; left:0; width:100%; height:100%;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent, transparent 2px,
+    rgba(0,255,65,0.015) 2px, rgba(0,255,65,0.015) 4px
+  );
+  pointer-events: none; z-index: 9999;
+}
+
+/* header */
+.header {
+  border-bottom: 1px solid var(--border);
+  padding: 16px 32px;
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--panel-bg);
+}
+.header h1 {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  color: var(--green-bright);
+  text-shadow: 0 0 8px rgba(0,255,65,0.3);
+  letter-spacing: 2px;
+}
+.header .status {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--green);
+  display: flex; align-items: center; gap: 8px;
+}
+.header .status .dot {
+  width: 8px; height: 8px;
+  background: var(--green-bright);
+  border-radius: 50%;
+  box-shadow: 0 0 6px var(--green-bright);
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0%,100% { opacity:1; }
+  50% { opacity:0.3; }
+}
+
+/* tabs */
+.tabs {
+  display: flex; gap: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-bg);
+  padding: 0 32px;
+}
+.tab-btn {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: none; border: none;
+  color: var(--text-dim);
+  padding: 10px 20px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+  letter-spacing: 1px;
+}
+.tab-btn:hover { color: var(--green); }
+.tab-btn.active {
+  color: var(--green-bright);
+  border-bottom-color: var(--green-bright);
+  text-shadow: 0 0 6px rgba(0,255,65,0.4);
+}
+
+/* panels */
+.panel { display: none; padding: 24px 32px; }
+.panel.active { display: block; }
+
+/* section title */
+.section-title {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  color: var(--accent);
+  text-shadow: 0 0 4px rgba(0,255,65,0.2);
+  margin-bottom: 20px;
+  letter-spacing: 1px;
+}
+.section-title::before { content: '> '; color: var(--green-dim); }
+
+/* ── Skills Grid ── */
+.skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+.skill-card {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.25s;
+}
+.skill-card:hover {
+  border-color: var(--green);
+  box-shadow: 0 0 12px rgba(0,255,65,0.1);
+}
+.skill-card .skill-name {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--green-bright);
+  margin-bottom: 6px;
+}
+.skill-card .skill-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+.skill-card .skill-tags {
+  display: flex; flex-wrap: wrap; gap: 4px;
+}
+.skill-card .skill-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--accent);
+}
+.skill-card .skill-meta {
+  display: flex; justify-content: space-between;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.skill-card .tool-count {
+  font-family: var(--font-mono);
+  color: var(--green);
+}
+
+/* modal */
+.modal-overlay {
+  display: none;
+  position: fixed; top:0; left:0; width:100%; height:100%;
+  background: rgba(0,0,0,0.85);
+  z-index: 100;
+  justify-content: center; align-items: center;
+}
+.modal-overlay.show { display: flex; }
+.modal-box {
+  background: var(--panel-bg);
+  border: 1px solid var(--green);
+  border-radius: 6px;
+  padding: 28px;
+  max-width: 500px; width: 90%;
+  box-shadow: 0 0 30px rgba(0,255,65,0.15);
+}
+.modal-box h2 {
+  font-family: var(--font-mono);
+  color: var(--green-bright);
+  margin-bottom: 12px;
+}
+.modal-box .modal-row {
+  font-size: 13px;
+  margin-bottom: 8px;
+  color: var(--text-dim);
+}
+.modal-box .modal-row strong { color: var(--text); }
+.modal-close {
+  margin-top: 16px;
+  background: none; border: 1px solid var(--green);
+  color: var(--green); padding: 6px 20px;
+  font-family: var(--font-mono); font-size: 12px;
+  cursor: pointer; border-radius: 2px;
+}
+.modal-close:hover {
+  background: rgba(0,255,65,0.1);
+}
+
+/* ── Topology ── */
+.topology-container {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 24px;
+  min-height: 420px;
+  overflow: hidden;
+}
+
+/* ── Log Terminal ── */
+.terminal {
+  background: #000a00;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  height: 500px;
+  overflow-y: auto;
+  padding: 16px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  position: relative;
+}
+.terminal::-webkit-scrollbar { width: 4px; }
+.terminal::-webkit-scrollbar-track { background: #000; }
+.terminal::-webkit-scrollbar-thumb { background: var(--green-dim); border-radius: 2px; }
+.term-line { display: flex; gap: 6px; white-space: nowrap; }
+.term-line .ts { color: #2a5a2a; }
+.term-line .lv { min-width: 42px; }
+.term-line .lv.INFO { color: var(--green); }
+.term-line .lv.WARNING { color: var(--warning); }
+.term-line .lv.ERROR { color: var(--danger); }
+.term-line .tx { color: var(--text); }
+.term-controls {
+  display: flex; gap: 12px; align-items: center;
+  margin-bottom: 10px;
+}
+.term-controls .term-status {
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--text-dim);
+}
+.term-controls .term-status.connected { color: var(--green); }
+.term-controls .term-status.disconnected { color: var(--danger); }
+.clear-btn {
+  background: none; border: 1px solid var(--border);
+  color: var(--text-dim); font-family: var(--font-mono); font-size: 11px;
+  padding: 4px 12px; cursor: pointer; border-radius: 2px;
+}
+.clear-btn:hover { border-color: var(--green); color: var(--green); }
+
+/* ── Stats bar ── */
+.stats-bar {
+  display: flex; gap: 24px;
+  margin-bottom: 20px;
+  padding: 12px 16px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.stat-item {
+  font-family: var(--font-mono); font-size: 12px;
+}
+.stat-item .stat-val { color: var(--green-bright); font-size: 16px; }
+.stat-item .stat-label { color: var(--text-dim); font-size: 10px; }
+
+/* loading */
+.loading { text-align: center; color: var(--text-dim); padding: 40px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>▸ J.A.R.V.I.S <span style="color:var(--text-dim);font-size:14px;">诊断仪表盘 v1.0</span></h1>
+  <div class="status"><span class="dot"></span> SYSTEM ONLINE <span id="ws-status">&#x1f534; 离线</span></div>
+</div>
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="tab-skills">📋 技能树</button>
+  <button class="tab-btn" data-tab="tab-topology">🕸 Agent 拓扑</button>
+  <button class="tab-btn" data-tab="tab-logs">📟 实时日志</button>
+</div>
+
+<!-- ═══════════ 技能树 ═══════════ -->
+<div id="tab-skills" class="panel active">
+  <div class="section-title">SKILL_MANIFEST</div>
+  <div id="skills-stats" class="stats-bar"></div>
+  <div id="skills-grid" class="skills-grid"><div class="loading">LOADING…</div></div>
+  <div id="skill-modal" class="modal-overlay"></div>
+</div>
+
+<!-- ═══════════ Agent 拓扑 ═══════════ -->
+<div id="tab-topology" class="panel">
+  <div class="section-title">AGENT_SWARM_TOPOLOGY</div>
+  <div id="topology-stats" class="stats-bar"></div>
+  <div class="topology-container">
+    <div id="mermaid-graph" style="text-align:center;"><div class="loading">LOADING…</div></div>
+    <div id="echarts-graph" style="width:100%;height:480px;"></div>
+  </div>
+</div>
+
+<!-- ═══════════ 实时日志 ═══════════ -->
+<div id="tab-logs" class="panel">
+  <div class="section-title">LOG_STREAM /ws/logs</div>
+  <div class="term-controls">
+    <span id="term-status" class="term-status disconnected">⏳ CONNECTING…</span>
+    <button class="clear-btn" onclick="clearTerminal()">CLEAR</button>
+    <span id="line-count" style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim);">0 lines</span>
+  </div>
+  <div id="terminal" class="terminal"></div>
+</div>
+
+<script>
+console.log("🚀 仪表盘前端脚本已加载...");
+
+/* ═══════════════ TAB 切换 ═══════════════ */
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'tab-topology') initTopology();
+    if (btn.dataset.tab === 'tab-logs') initLogStream();
+  });
+});
+
+/* ═══════════════ 技能树 ═══════════════ */
+async function loadSkills() {
+  try {
+    const res = await fetch('/api/skills');
+    const data = await res.json();
+    const skills = data.skills || [];
+    renderSkills(skills);
+    renderSkillStats(skills);
+  } catch(e) {
+    document.getElementById('skills-grid').innerHTML =
+      '<div class="loading" style="color:var(--danger);">加载失败</div>';
+  }
+}
+
+function renderSkillStats(skills) {
+  const total = skills.length;
+  const withTools = skills.filter(s => s.tools && s.tools.length > 0).length;
+  const executable = skills.filter(s => s.executable).length;
+  document.getElementById('skills-stats').innerHTML = [
+    {v: total, l: '技能总数'},
+    {v: withTools, l: '含工具'},
+    {v: executable, l: '可执行'},
+  ].map(s => `<div class="stat-item"><div class="stat-val">${s.v}</div><div class="stat-label">${s.l}</div></div>`).join('');
+}
+
+function renderSkills(skills) {
+  const grid = document.getElementById('skills-grid');
+  if (!skills.length) {
+    grid.innerHTML = '<div class="loading">未注册任何技能</div>';
+    return;
+  }
+  grid.innerHTML = skills.map(s => `
+    <div class="skill-card" onclick="showSkillDetail(${JSON.stringify(s).replace(/"/g,'&quot;')})" data-skill='${JSON.stringify(s).replace(/'/g,'&#39;')}'>
+      <div class="skill-name">▸ ${esc(s.name)}</div>
+      <div class="skill-desc">${esc(s.description)}</div>
+      <div class="skill-tags">${(s.trigger_keywords||[]).slice(0,4).map(k => `<span class="skill-tag">${esc(k)}</span>`).join('')}</div>
+      <div class="skill-meta">
+        <span class="tool-count">tools: ${(s.tools||[]).length}</span>
+        <span>${s.executable ? '⚡ 可执行' : ''}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+function showSkillDetail(s) {
+  const modal = document.getElementById('skill-modal');
+  modal.innerHTML = `
+    <div class="modal-box">
+      <h2>▸ ${esc(s.name)}</h2>
+      <div class="modal-row"><strong>描述</strong><br>${esc(s.description)}</div>
+      <div class="modal-row"><strong>触发词</strong><br>${(s.trigger_keywords||[]).join(', ') || '无'}</div>
+      <div class="modal-row"><strong>工具</strong><br>${(s.tools||[]).join(', ') || '无'}</div>
+      <div class="modal-row"><strong>可执行脚本</strong><br>${esc(s.executable || '无')}</div>
+      <button class="modal-close" onclick="this.closest('.modal-overlay').classList.remove('show')">CLOSE</button>
+    </div>
+  `;
+  modal.classList.add('show');
+}
+
+// 点击遮罩关闭
+document.addEventListener('click', e => {
+  if (e.target.classList.contains('modal-overlay')) {
+    e.target.classList.remove('show');
+  }
+});
+
+/* ═══════════════ Agent 拓扑 ═══════════════ */
+let topologyLoaded = false;
+
+async function initTopology() {
+  if (topologyLoaded) return;
+  try {
+    const res = await fetch('/api/agents');
+    const data = await res.json();
+    renderTopology(data);
+    topologyLoaded = true;
+  } catch(e) {
+    document.getElementById('mermaid-graph').innerHTML =
+      '<div class="loading" style="color:var(--danger);">拓扑加载失败</div>';
+  }
+}
+
+function renderTopology(data) {
+  const mainAgent = data.main_agent;
+  const subAgents = data.sub_agents || [];
+
+  // 统计
+  document.getElementById('topology-stats').innerHTML = [
+    {v: 1 + subAgents.length, l: 'Agent 总数'},
+    {v: mainAgent?.provider || 'N/A', l: '主脑模型'},
+    {v: subAgents.length, l: '子Agent数'},
+  ].map(s => `<div class="stat-item"><div class="stat-val">${s.v}</div><div class="stat-label">${s.l}</div></div>`).join('');
+
+  // ECharts 力导向图
+  const dom = document.getElementById('echarts-graph');
+  const chart = echarts.init(dom, 'dark');
+
+  const nodes = [
+    {
+      id: 'main',
+      name: mainAgent?.name || 'JARVIS大脑',
+      symbolSize: 50,
+      itemStyle: { color: '#39ff14' },
+      category: 0,
+      label: { show: true, color: '#39ff14', fontSize: 13, fontFamily: 'monospace' }
+    }
+  ];
+
+  const edges = [];
+  subAgents.forEach((sa, i) => {
+    nodes.push({
+      id: sa.name,
+      name: sa.name,
+      symbolSize: 32,
+      itemStyle: { color: '#0df0a0' },
+      category: 1,
+      label: { show: true, color: '#b3ffb3', fontSize: 11, fontFamily: 'monospace' }
+    });
+    edges.push({
+      source: 'main',
+      target: sa.name,
+      lineStyle: { color: '#1a3a2a', width: 1.5, curveness: 0.2 }
+    });
+  });
+
+  chart.setOption({
+    backgroundColor: 'transparent',
+    tooltip: {
+      formatter: p => p.dataType === 'node'
+        ? `<b>${p.name}</b><br/>模型: ${subAgents.find(s=>s.name===p.name)?.model||'N/A'}`
+        : `${p.data.source} → ${p.data.target}`
+    },
+    series: [{
+      type: 'graph',
+      layout: 'force',
+      force: { repulsion: 280, edgeLength: [180, 280], gravity: 0.08 },
+      roam: true,
+      draggable: true,
+      data: nodes,
+      edges: edges,
+      categories: [
+        { name: '主脑' },
+        { name: '子Agent' }
+      ]
+    }]
+  });
+
+  window.addEventListener('resize', () => chart.resize());
+
+  // 也渲染一个 Mermaid 图
+  const mermaidDiv = document.getElementById('mermaid-graph');
+  let mermaidCode = 'graph TD\n';
+  mermaidCode += '  MAIN["' + (mainAgent?.name || 'JARVIS大脑') + '"]\n';
+  subAgents.forEach(sa => {
+    mermaidCode += `  MAIN --> ${sa.name.replace(/-/g,'_')}["${sa.name}"]\n`;
+  });
+  mermaidDiv.innerHTML = `<pre class="mermaid">${mermaidCode}</pre>`;
+  try { mermaid.run({ nodes: [mermaidDiv.querySelector('.mermaid')] }); } catch(e) {}
+}
+
+/* ═══════════════ 实时日志终端 ═══════════════ */
+let wsLog = null;
+let logLineCount = 0;
+
+function initLogStream() {
+  if (wsLog && wsLog.readyState === WebSocket.OPEN) return;
+  connectLogStream();
+}
+
+function connectLogStream() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${proto}//${location.host}/ws/logs`;
+  console.log("🔌 尝试连接 WebSocket:", url);
+
+  wsLog = new WebSocket(url);
+  const statusEl = document.getElementById('term-status');
+
+  wsLog.onopen = () => {
+    console.log("✅ WebSocket 连接成功！");
+    document.getElementById('ws-status').innerHTML = '🟢 在线';
+    statusEl.textContent = '● CONNECTED';
+    statusEl.className = 'term-status connected';
+  };
+
+  wsLog.onmessage = (e) => {
+    console.log("📥 收到后端原始数据:", e.data);
+    updateLogs(e.data);
+  };
+
+  wsLog.onclose = () => {
+    console.log("⚠ WebSocket 已关闭，3秒后重连...");
+    document.getElementById('ws-status').innerHTML = '🔴 离线';
+    statusEl.textContent = '○ DISCONNECTED';
+    statusEl.className = 'term-status disconnected';
+    setTimeout(connectLogStream, 3000);
+  };
+
+  wsLog.onerror = (e) => {
+    console.error("❌ WebSocket 报错:", e);
+    document.getElementById('ws-status').innerHTML = '⚠️ 错误';
+    statusEl.className = 'term-status disconnected';
+    statusEl.textContent = '⚠ ERROR';
+  };
+
+  // 心跳
+  setInterval(() => {
+    if (wsLog && wsLog.readyState === WebSocket.OPEN) {
+      wsLog.send('ping');
+    }
+  }, 15000);
+}
+
+function updateLogs(rawData) {
+    try {
+        const data = JSON.parse(rawData);
+        if (data.type === "agent_status") {
+            updateAgentStatus(data);
+        } else {
+            appendLogLine(data);
+        }
+    } catch(_) {}
+    const term = document.getElementById('terminal');
+    if (term) term.scrollTop = term.scrollHeight;
+}
+
+function updateAgentStatus(data) {
+    const statsBar = document.getElementById('topology-stats');
+    if (statsBar && data.main_agent) {
+        statsBar.innerHTML = [
+            {v: data.agent_count || 0, l: 'Agent 总数'},
+            {v: data.main_agent.provider || 'N/A', l: '主脑模型'},
+            {v: (data.sub_agents || []).length, l: '子Agent数'},
+        ].map(s => `<div class="stat-item"><div class="stat-val">${s.v}</div><div class="stat-label">${s.l}</div></div>`).join('');
+    }
+    if (typeof topologyLoaded !== 'undefined' && topologyLoaded) {
+        renderTopology(data);
+    }
+}
+
+function appendLogLine(entry) {
+  const term = document.getElementById('terminal');
+  if (!term) return;
+
+  const div = document.createElement('div');
+  div.className = 'term-line';
+
+  const time = entry.time || '--:--:--';
+  const timeShort = time.split(' ').pop() || time;
+
+  div.innerHTML = `
+    <span class="ts">${esc(timeShort)}</span>
+    <span class="lv ${esc(entry.level||'INFO')}">[${esc(entry.level||'INFO')}]</span>
+    <span class="tx">${esc(entry.msg||'')}</span>
+  `;
+
+  term.appendChild(div);
+  logLineCount++;
+
+  // 限制最多 800 行
+  while (term.children.length > 800) {
+    term.removeChild(term.firstChild);
+    logLineCount--;
+  }
+
+  document.getElementById('line-count').textContent = `${logLineCount} lines`;
+  term.scrollTop = term.scrollHeight;
+}
+
+function clearTerminal() {
+  const term = document.getElementById('terminal');
+  term.innerHTML = '';
+  logLineCount = 0;
+  document.getElementById('line-count').textContent = '0 lines';
+}
+
+/* ═══════════════ 工具函数 ═══════════════ */
+function esc(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/* ═══════════════ 启动 ═══════════════ */
+mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+loadSkills();
+</script>
+</body>
+</html>

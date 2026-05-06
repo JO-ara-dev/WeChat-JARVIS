@@ -9,3 +9,8 @@ beautifulsoup4
 lxml
 requests
 httpx
+chromadb
+sentence-transformers
+fastapi
+uvicorn[standard]
+websockets

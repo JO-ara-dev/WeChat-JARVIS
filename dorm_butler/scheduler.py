@@ -1,5 +1,6 @@
 """
 贾维斯定时任务调度器
+- 每天早上 08:00 生成并推送每日早报
 - 每晚 22:00 提醒次日课程
 - 使用 APScheduler 后台运行
 """
@@ -7,6 +8,7 @@
 import os
 import sys
 import json
+import queue
 import logging
 import datetime
 from pathlib import Path
@@ -15,6 +17,9 @@ logger = logging.getLogger("WCF")
 
 # 全局调度器实例
 _scheduler = None
+
+# 线程安全的消息队列：供 morning_report 写入，wx4py_bridge 轮询消费
+schedule_queue = queue.Queue()
 
 
 def _get_project_root() -> str:
@@ -203,6 +208,41 @@ def _nightly_reminder():
         logger.error(f"[定时任务] 执行失败: {e}")
 
 
+def _morning_report_job():
+    """每天早上 08:00 生成并推送每日早报"""
+    logger.info("[定时任务] 执行每日早报...")
+
+    if _is_weekend():
+        logger.info("[定时任务] 周末，跳过早报")
+        return
+
+    try:
+        from .morning_report import run_morning_report
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from dorm_butler import db_manager
+
+        users = db_manager.get_all_users()
+        target_group = "测试"
+        if users:
+            target_group = users[0].get("user_id") or users[0].get("nickname") or "测试"
+        elif "GROUPS" in dir(__import__("wx4py_bridge")):
+            groups = __import__("wx4py_bridge").GROUPS
+            target_group = groups[0] if groups else "测试"
+
+        report = run_morning_report(target_group=target_group)
+        if report:
+            logger.info(f"[早报] 生成成功 ({len(report)} 字)")
+        else:
+            logger.warning("[早报] 生成失败")
+    except Exception as e:
+        logger.error(f"[早报] 执行异常: {e}")
+
+
+def _is_weekend():
+    """判断今天是否为周末"""
+    return datetime.datetime.now().weekday() >= 5
+
+
 def start_scheduler():
     """启动定时任务调度器"""
     global _scheduler
@@ -216,7 +256,17 @@ def start_scheduler():
         from apscheduler.triggers.cron import CronTrigger
 
         _scheduler = BackgroundScheduler()
-        # 每晚 22:00 执行
+
+        # 每天早上 08:00 — 每日早报
+        _scheduler.add_job(
+            _morning_report_job,
+            CronTrigger(hour=8, minute=0),
+            id="morning_report",
+            name="每日早报",
+            replace_existing=True,
+        )
+
+        # 每晚 22:00 — 次日课程提醒
         _scheduler.add_job(
             _nightly_reminder,
             CronTrigger(hour=22, minute=0),
@@ -224,8 +274,11 @@ def start_scheduler():
             name="晚间课程提醒",
             replace_existing=True,
         )
+
         _scheduler.start()
-        logger.info("[定时任务] 调度器已启动，每晚 22:00 提醒次日课程")
+        logger.info("[定时任务] 调度器已启动:")
+        logger.info("[定时任务]   08:00  每日早报（周一至周五）")
+        logger.info("[定时任务]   22:00  晚间课程提醒")
     except Exception as e:
         logger.error(f"[定时任务] 启动失败: {e}")
         _scheduler = None

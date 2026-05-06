@@ -331,9 +331,24 @@ def _handle_session_cmd(user_id: str, content: str) -> str | None:
 def process_worker(action_emitter):
     """后台处理线程，通过 action_emitter 发送回复（走独立窗口）"""
     from wx4py.features.messaging.processor import ReplyAction
+    from dorm_butler.scheduler import schedule_queue
 
     while True:
         try:
+            # ── 优先检查定时任务队列（非阻塞）──
+            try:
+                sched_msg = schedule_queue.get_nowait()
+                sched_group = sched_msg.get("group", "测试")
+                sched_content = sched_msg.get("content", "")
+                if sched_content:
+                    reply = _format_reply(sched_content)
+                    logger.info(f"[定时推送] 发送早报到: {sched_group}")
+                    action_emitter(ReplyAction(group=sched_group, content=reply))
+                continue
+            except Exception:
+                pass
+
+            # ── 常规消息处理 ──
             item = msg_queue.get()
             if item is None:
                 break

@@ -46,6 +46,7 @@ generate_elegant_insults.py
 deliver_ppt.py
 render_pdf.py
 shutdown_tool.py
+lottery_output.txt
 
 # OS
 .DS_Store

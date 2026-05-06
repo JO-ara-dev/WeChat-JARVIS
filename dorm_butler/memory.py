@@ -9,7 +9,15 @@ import json
 import datetime
 import sqlite3
 from pathlib import Path
+import uuid
 from . import sessions as _sessions
+
+try:
+    import chromadb
+    from chromadb.utils import embedding_functions
+    CHROMADB_AVAILABLE = True
+except ImportError:
+    CHROMADB_AVAILABLE = False
 
 # DB 路径：复用 db_manager 的同一个数据库
 _PROJECT_ROOT = Path(__file__).parent.parent
@@ -212,6 +220,21 @@ TOOLS_SCHEMA = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_vector_memory",
+            "description": "将用户透露的个人偏好（如饮食/习惯）、重要时间节点（DDL/考试）或技术报错经验总结后永久保存到向量记忆库。每次发现用户透露新信息时必须主动调用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "一句话清晰总结的记忆核心内容，去除无关上下文"},
+                    "category": {"type": "string", "enum": ["偏好", "时间节点", "报错经验"], "description": "记忆类别"}
+                },
+                "required": ["content", "category"]
+            }
+        }
+    },
 ]
 
 
@@ -286,12 +309,101 @@ def _run_code(user_id: str, code: str) -> dict:
         return {"success": False, "message": f"执行错误: {str(e)}"}
 
 
+# ── 向量记忆系统 (ChromaDB) ──
+
+class VectorMemory:
+    """基于 ChromaDB 的向量长期记忆系统
+    存储由 LLM Tool Calling 驱动，检索由 Agent 内部自动完成。
+    
+    国内 HuggingFace 模型下载加速（三选一）：
+      1. 环境变量 (cmd):  set HF_ENDPOINT=https://hf-mirror.com
+      2. 环境变量 (PS):   $env:HF_ENDPOINT="https://hf-mirror.com"
+      3. 代码设置:        os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+    """
+
+    def __init__(self, persist_dir=None, embedding_model="paraphrase-multilingual-MiniLM-L12-v2"):
+        self._path = persist_dir or str(_PROJECT_ROOT / "data" / "chroma_db")
+        self._model_name = embedding_model
+        self._client = None
+        self._collection = None
+        self._ready = False
+        if not CHROMADB_AVAILABLE:
+            return
+        try:
+            os.makedirs(self._path, exist_ok=True)
+            self._client = chromadb.PersistentClient(path=self._path)
+            self._embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+                model_name=self._model_name
+            )
+            self._collection = self._client.get_or_create_collection(
+                name="jarvis_memory",
+                embedding_function=self._embedding_fn
+            )
+            self._ready = True
+        except Exception as e:
+            import logging
+            logging.getLogger("WCF").warning(f"[VectorMemory] 初始化失败: {e}")
+
+    def add_memory(self, content, metadata=None):
+        """直接写入向量库（由 LLM Tool Calling 驱动调用）"""
+        if not self._ready:
+            return {"success": False, "message": "向量数据库未就绪"}
+        if metadata is None:
+            metadata = {}
+        metadata["timestamp"] = datetime.datetime.now().isoformat()
+        try:
+            self._collection.add(
+                documents=[content],
+                metadatas=[metadata],
+                ids=[str(uuid.uuid4())]
+            )
+            return {"success": True, "message": "已存储向量记忆"}
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
+    def query_memory(self, query_text, n_results=3):
+        """检索最相似的长期记忆"""
+        if not self._ready:
+            return []
+        try:
+            results = self._collection.query(
+                query_texts=[query_text],
+                n_results=n_results
+            )
+            memories = []
+            if results.get("documents") and results["documents"][0]:
+                for i, doc in enumerate(results["documents"][0]):
+                    meta = results["metadatas"][0][i] if results.get("metadatas") else {}
+                    memories.append({"content": doc, "metadata": meta})
+            return memories
+        except Exception:
+            return []
+
+
+_vector_memory = None
+
+
+def _get_vector_memory() -> VectorMemory:
+    """获取 VectorMemory 单例（懒加载）"""
+    global _vector_memory
+    if _vector_memory is None:
+        _vector_memory = VectorMemory()
+    return _vector_memory
+
+
+def _vmemory_add(user_id: str, content: str, category: str = "") -> dict:
+    """工具：添加向量记忆"""
+    vm = _get_vector_memory()
+    return vm.add_memory(content, {"user_id": user_id, "category": category})
+
+
 # 工具分发表
 TOOLS_MAP = {
     "save_memory": _save_memory,
     "get_memory": _get_memory,
     "delete_memory": _delete_memory,
     "run_code": _run_code,
+    "add_vector_memory": _vmemory_add,
 }
 
 

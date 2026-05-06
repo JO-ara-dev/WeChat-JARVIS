@@ -64,7 +64,7 @@ def load_manifest() -> list[dict]:
     return data.get("skills", [])
 
 
-def classify_intent(user_message: str, client, skills: list[dict] = None, model: str = "GLM-4.7-Flash") -> dict:
+def classify_intent(user_message: str, client, skills: list[dict] = None, model: str = "GLM-4.7-Flash", mgr=None, provider=None) -> dict:
     """
     前置意图分类：用指定模型快速判断用户意图，匹配技能。
 
@@ -107,15 +107,28 @@ def classify_intent(user_message: str, client, skills: list[dict] = None, model:
     )
 
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": classification_prompt},
-                        {"role": "user", "content": f"用户消息：{user_message}"}],
-            temperature=0,
-            max_tokens=300,
-            timeout=15,
-            response_format={"type": "json_object"},
-        )
+        if mgr and provider:
+            from .agent_manager import call_with_fallback, FallbackError
+            try:
+                response = call_with_fallback(
+                    mgr, provider, model,
+                    {"temperature": 0, "max_tokens": 300, "response_format": {"type": "json_object"}},
+                    [{"role": "user", "content": classification_prompt},
+                     {"role": "user", "content": f"用户消息：{user_message}"}],
+                )
+            except FallbackError:
+                logger.warning("[意图分类] 容灾失败，降级返回空匹配")
+                return {"matched_skill": None, "confidence": 0, "keywords": []}
+        else:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": classification_prompt},
+                            {"role": "user", "content": f"用户消息：{user_message}"}],
+                temperature=0,
+                max_tokens=300,
+                timeout=15,
+                response_format={"type": "json_object"},
+            )
         result_text = response.choices[0].message.content or "{}"
         result_text = result_text.strip()
 
