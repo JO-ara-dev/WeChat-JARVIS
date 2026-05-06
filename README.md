@@ -20,10 +20,11 @@
 
 | 角色 | 模型 | 用途 | 费用 |
 |------|------|------|------|
-| 🧠 大脑 | DeepSeek (deepseek-chat) | 对话推理、工具调用、代码执行、技能生成 | 极低 |
+| 🧠 大脑 | DeepSeek (deepseek-chat/v4-pro/v4-flash) | 对话推理、工具调用、代码执行 | 极低 |
+| 🧠 备选大脑 | 智谱 GLM (BigModel.cn) | 国产替代，网络更稳定 | 中等 |
 | 👁️ 眼睛 | 阿里云 Qwen-VL-Plus | 课表截图 OCR、图片内容识别 | 按量 |
 
-纯文本模型当大脑负责思考决策，多模态模型当眼睛负责"看"图片。两者按需调用，不浪费 token。
+> 💡 通过 `agent_config.json` 可在 DeepSeek / 智谱 / 阿里三家 API 间无缝切换，无需改代码。
 
 ---
 
@@ -53,6 +54,8 @@ Swarm 汇总结果 → 组装最终回复
 | `course-manager` | deepseek-chat | 课表查询、作业管理 |
 | `vision-analyst` | qwen-vl-plus | 图片 OCR、课表截图识别 |
 | `system-admin` | deepseek-chat | 环境搭建、服务部署 |
+| `exam-reminder` | deepseek-chat | 考试日期追踪、考前提醒 |
+| `parallel-doc-generator` | deepseek-v4-pro | 多 Agent 并行生成复杂文档 |
 
 ---
 
@@ -95,7 +98,9 @@ Swarm 汇总结果 → 组装最终回复
 |------|------|------|
 | DEEPSEEK_API_KEY | DeepSeek API 密钥（纯文本大脑） | 是 |
 | DEEPSEEK_API_BASE | DeepSeek 接口地址 | 否（默认官方） |
-| DASHSCOPE_API_KEY | 多模态图片大模型密钥（阿里云 DashScope） | 否（图片识别用） |
+| ZHIPU_API_KEY | 智谱 GLM API 密钥（备选纯文本大脑） | 否 |
+| DASHSCOPE_API_KEY | 多模态图片大模型密钥（阿里云 DashScope） | 否 |
+| DB_PATH | 数据库文件路径 | 否（默认 ./data/butler.db） |
 | TUNNEL_PROVIDER | 内网穿透工具：auto/cpolar/ngrok | 否（默认 auto） |
 | CRAWLER_USERNAME | 教务系统登录用户名 | 否（爬虫用） |
 | CRAWLER_PASSWORD | 教务系统登录密码 | 否（爬虫用） |
@@ -115,12 +120,15 @@ Swarm 汇总结果 → 组装最终回复
 │   ├── skill_manager.py         # 技能注册
 │   ├── agent_swarm.py           # 多 Agent 协作引擎
 │   ├── sub_agent.py             # SubAgent 执行器
+│   ├── agent_manager.py         # Agent 配置管理器（三合一客户端）
+│   ├── agent_config.json         # Agent 配置中心（热更新）
+│   ├── agents.json              # 子 Agent 定义
 │   ├── harness_guard.py         # 死循环防护
-│   ├── agents.json              # 子 Agent 配置
 │   └── vision_processor.py      # 双 AI 视觉链路
 ├── Skills/                      # 技能目录（Agent 自进化产物）
 ├── crawler.py                   # 教务系统爬虫
 ├── schema.sql                   # 数据库建表语句
+├── CHANGELOG.md                 # 更新日志
 └── .env.example                 # 环境变量模板
 ```
 
