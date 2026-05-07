@@ -425,27 +425,23 @@ def identify_me(user_id: str, nickname: str) -> dict:
 
 
 def web_search(query: str) -> dict:
-    """联网搜索"""
+    """联网搜索（智能代理降级：先走系统代理，失败则绕过代理重试）"""
     import urllib.request
     import urllib.parse
-    
-    try:
-        encoded_query = urllib.parse.quote(query)
-        url = f"https://www.bing.com/search?q={encoded_query}&mkt=zh-CN"
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept-Language": "zh-CN,zh;q=0.9"
-        })
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            html = resp.read().decode('utf-8', errors='ignore')
-        
-        import re
+    import urllib.error
+    import ssl
+    import re
 
-        # 先去除 script/style 标签（含内容），避免 JS 代码污染
+    encoded_query = urllib.parse.quote(query)
+    url = f"https://www.bing.com/search?q={encoded_query}&mkt=zh-CN"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "zh-CN,zh;q=0.9"
+    }
+
+    def _parse_html(html: str):
         html = re.sub(r'<script[^>]*>[\s\S]*?</script>', '', html)
         html = re.sub(r'<style[^>]*>[\s\S]*?</style>', '', html)
-
-        # 优先提取搜索结果项 (Bing: li.b_algo > h2 > a, p)
         results = []
         for block in re.split(r'<li\b[^>]*class="b_algo"[^>]*>', html)[1:]:
             title_m = re.search(r'<h2[^>]*>.*?<a[^>]*>(.*?)</a>', block, re.DOTALL)
@@ -460,18 +456,44 @@ def web_search(query: str) -> dict:
                 results.append(f"{title}\n  {desc}"[:300])
             if len(results) >= 5:
                 break
-
         if results:
             text = '\n\n'.join(results)
         else:
-            # 兜底：纯文本提取
             text = re.sub(r'<[^>]+>', ' ', html)
             text = re.sub(r'\s+', ' ', text).strip()
             text = text[:1200]
+        return results, text
 
-        return {"success": True, "data": {"query": query, "results": results if results else None, "snippet": text}, "message": f"搜索完成({len(results)}条)"}
-    except Exception as e:
-        return {"success": False, "data": None, "message": f"搜索失败: {str(e)}"}
+    for attempt in range(2):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            if attempt == 0:
+                resp = urllib.request.urlopen(req, timeout=10)
+            else:
+                proxy_handler = urllib.request.ProxyHandler({})
+                opener = urllib.request.build_opener(proxy_handler)
+                resp = opener.open(req, timeout=10)
+
+            with resp:
+                html = resp.read().decode('utf-8', errors='ignore')
+
+            results, text = _parse_html(html)
+            return {
+                "success": True,
+                "data": {"query": query, "results": results if results else None, "snippet": text},
+                "message": f"搜索完成({len(results)}条)"
+            }
+        except (urllib.error.URLError, ssl.SSLError) as e:
+            if attempt == 0:
+                logger.warning(f"web_search 代理模式请求失败，将绕过代理重试: {e}")
+                continue
+            else:
+                return {
+                    "success": False,
+                    "message": "网络不稳定或接口受限，已尝试智能切换网络环境仍失败，请停止重试，尝试其他方案或直接回复用户。"
+                }
+        except Exception as e:
+            return {"success": False, "data": None, "message": f"搜索失败: {str(e)}"}
 
 
 def read_file(file_path: str, limit: int = None, offset: int = 0) -> dict:

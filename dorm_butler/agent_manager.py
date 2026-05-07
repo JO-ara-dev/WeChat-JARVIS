@@ -74,6 +74,9 @@ class AgentManager:
         )
     """
 
+    # 类级别状态缓存，用于抑制重复的 __init__ 日志刷屏
+    _last_logged_state = None
+
     # ────────────────────────────────────────────────────────────────
     # 构造与初始化
     # ────────────────────────────────────────────────────────────────
@@ -98,7 +101,12 @@ class AgentManager:
         self._load()
         agent_count = len(self._config.get("sub_agents", []))
         main_name = self._config.get("main_agent", {}).get("name", "未定义")
-        logger.info(f"AgentManager 已加载 | 主Agent: {main_name} | 子Agent: {agent_count} 个")
+        current_state = (main_name, agent_count)
+        if current_state != AgentManager._last_logged_state:
+            logger.info(f"AgentManager 已加载 | 主Agent: {main_name} | 子Agent: {agent_count} 个")
+            AgentManager._last_logged_state = current_state
+        else:
+            logger.debug(f"AgentManager 已加载 | 主Agent: {main_name} | 子Agent: {agent_count} 个 (状态未变化)")
 
     # ────────────────────────────────────────────────────────────────
     # 文件 I/O（线程安全 + 原子写入）

@@ -249,6 +249,16 @@
       "tools": [],
       "executable": null,
       "description": "三Agent并行文档生成技能 - 自动将内容生成真正的PPT/Word/Excel文档"
+    },
+    {
+      "name": "design-aesthetic",
+      "folder": "design-aesthetic/",
+      "trigger_keywords": [],
+      "tools": [
+        "get_memory"
+      ],
+      "executable": null,
+      "description": "设计美学规范 — 所有生成网页/UI/文档/图表的通用审美标准"
     }
   ]
 }

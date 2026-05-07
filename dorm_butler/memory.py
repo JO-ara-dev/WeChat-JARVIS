@@ -298,15 +298,43 @@ def _run_code(user_id: str, code: str) -> dict:
 
     try:
         with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
-            exec(code, {"__builtins__": __builtins__}, local_vars)
+            exec_globals = {"__builtins__": __builtins__}
+            exec_globals.update(local_vars)
+            exec(code, exec_globals, local_vars)
 
         output = stdout_capture.getvalue()
         if stderr_capture.getvalue():
             output += f"\n[stderr] {stderr_capture.getvalue()}"
 
+        # 清理 exec 中创建的 WeChatClient/ChatWindow 实例，防止 UIA 并发冲突导致窗口崩溃
+        _cleanup_wechat_clients(exec_globals)
+
         return {"success": True, "data": output.strip() or "执行完成，无输出", "message": "代码执行成功"}
     except Exception as e:
         return {"success": False, "message": f"执行错误: {str(e)}"}
+
+
+def _cleanup_wechat_clients(exec_globals: dict) -> None:
+    """清理 exec 中创建的 WeChatClient/ChatWindow 实例，防止多个 UIA 会话并发操作微信窗口。"""
+    try:
+        for var_name, var_val in exec_globals.items():
+            if var_name.startswith("_"):
+                continue
+            type_name = type(var_val).__name__
+            if "WeChatClient" in type_name:
+                try:
+                    if hasattr(var_val, "disconnect"):
+                        var_val.disconnect()
+                except Exception:
+                    pass
+            elif "ChatWindow" in type_name:
+                try:
+                    if hasattr(var_val, "_window") and hasattr(var_val._window, "disconnect"):
+                        var_val._window.disconnect()
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 
 # ── 向量记忆系统 (ChromaDB) ──
@@ -329,6 +357,10 @@ class VectorMemory:
         self._ready = False
         if not CHROMADB_AVAILABLE:
             return
+        # 从 .env 读取 HF_ENDPOINT（加速模型下载）
+        hf_endpoint = os.environ.get("HF_ENDPOINT")
+        if hf_endpoint:
+            os.environ["HF_ENDPOINT"] = hf_endpoint
         try:
             os.makedirs(self._path, exist_ok=True)
             self._client = chromadb.PersistentClient(path=self._path)

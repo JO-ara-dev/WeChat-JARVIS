@@ -29,6 +29,7 @@
 | 11 | 定时提醒课程，每晚22:00自动提醒次日课程安排 | [scheduled-reminder/](scheduled-reminder/) | scheduler.py | 定时提醒, 自动提醒, 课程提醒, 每晚提醒 |
 | 12 | 考试提醒技能 - 添加、查询、删除考试信息，并自动在指定天数前通过微信提醒用户 | [exam-reminder/](exam-reminder/) | — |  |
 | 13 | 三Agent并行文档生成技能 - 自动将内容生成真正的PPT/Word/Excel文档 | [parallel-doc-generator/](parallel-doc-generator/) | — |  |
+| 14 | 设计美学规范 — 所有生成网页/UI/文档/图表的通用审美标准 | [design-aesthetic/](design-aesthetic/) | — |  |
 
 ## 目录结构规范
 

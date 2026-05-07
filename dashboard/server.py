@@ -38,6 +38,31 @@ def _read_json(path: Path) -> dict:
         return {"error": str(e)}
 
 
+def _build_status_data():
+    """提取状态数据的共享逻辑（/api/status 和 agent_status_loop 共用）"""
+    from datetime import datetime
+
+    agents_path = _PROJECT_ROOT / "dorm_butler" / "agents.json"
+    config_path = _PROJECT_ROOT / "dorm_butler" / "agent_config.json"
+
+    agents_data = _read_json(agents_path)
+    config_data = _read_json(config_path)
+
+    sub_agents = agents_data.get("agents", []) if isinstance(agents_data, dict) else []
+    main_agent_raw = config_data.get("main_agent", {}) if isinstance(config_data, dict) else {}
+
+    return {
+        "agent_count": 1 + len(sub_agents),
+        "main_agent": {
+            "name": main_agent_raw.get("name", "JARVIS大脑"),
+            "provider": main_agent_raw.get("provider", "Unknown"),
+            "model": main_agent_raw.get("model", "Unknown"),
+        },
+        "sub_agents": [{"name": sa.get("name", ""), "model": sa.get("model", "")} for sa in sub_agents],
+        "timestamp": datetime.now().strftime("%H:%M:%S"),
+    }
+
+
 # ═══════════════════ REST API ═══════════════════
 
 @app.get("/api/skills")
@@ -91,6 +116,18 @@ def api_config():
             sa["system_prompt"] = sa["system_prompt"][:120] + "…"
 
     return data
+
+
+@app.get("/api/status")
+def api_status():
+    """
+    轻量级状态摘要（供前端 3 秒轮询）
+    仅读 JSON 文件，不做 AgentManager 实例化
+    """
+    try:
+        return _build_status_data()
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # ═══════════════════ WebSocket 日志流 ═══════════════════
@@ -148,26 +185,22 @@ async def broadcast_loop():
 
 
 async def agent_status_loop():
-    """每隔 5 秒广播一次 AgentManager 状态，激活前端渲染引擎"""
-    from datetime import datetime
+    """每隔 5 秒广播一次 Agent 状态，仅当状态变化时才推送"""
+    last_hash = None
     while True:
         await asyncio.sleep(5)
         if not _ws_clients:
             continue
         try:
-            from dorm_butler.agent_manager import AgentManager
-            config_path = _PROJECT_ROOT / "dorm_butler" / "agent_config.json"
-            mgr = AgentManager(str(config_path))
-            status = {
-                "type": "agent_status",
-                "main_agent": mgr.get_main_agent(),
-                "sub_agents": mgr.list_agents(),
-                "agent_count": len(mgr.list_agents()),
-                "timestamp": datetime.now().strftime("%H:%M:%S"),
-            }
-            safe_status = json.loads(json.dumps(status, default=str))
-            tasks = [ws.send_json(safe_status) for ws in _ws_clients]
-            await asyncio.gather(*tasks, return_exceptions=True)
+            status_data = _build_status_data()
+            current_hash = hash(str(status_data))
+
+            if current_hash != last_hash:
+                status_payload = {"type": "agent_status", **status_data}
+                safe_payload = json.loads(json.dumps(status_payload, default=str))
+                tasks = [ws.send_json(safe_payload) for ws in _ws_clients]
+                await asyncio.gather(*tasks, return_exceptions=True)
+                last_hash = current_hash
         except Exception:
             pass
 
@@ -210,6 +243,7 @@ def start_dashboard(host="127.0.0.1", port=9021):
         port=port,
         log_level="info",
         loop="asyncio",
+        access_log=False,
     )
     server = uvicorn.Server(config)
     logger.info(f"[仪表盘] 启动于 http://{host}:{port}")

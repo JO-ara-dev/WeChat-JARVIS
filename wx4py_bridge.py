@@ -99,44 +99,54 @@ def _capture_from_viewer(image_ctrl, hwnd: int) -> str | None:
 
         time.sleep(0.8)
 
-        # 3. 在整棵 UIA 树中找最大的 ImageControl（查看器里的大图）
-        big_image = None
-        max_area = 200 * 200
-        root = _ua.GetRootControl()
-        try:
-            for ctrl, _ in _ua.WalkControl(root, includeTop=True, maxDepth=10):
-                try:
-                    if ctrl.ControlTypeName != "ImageControl":
-                        continue
-                    rect = ctrl.BoundingRectangle
-                    if not rect:
-                        continue
-                    area = rect.width() * rect.height()
-                    if area > max_area:
-                        max_area = area
-                        big_image = ctrl
-                except Exception:
-                    continue
-        except Exception:
-            pass
+        # 3. 查找图片查看器窗口（独立顶级窗口），用hwnd定位
+        import win32gui
+        viewer_hwnd = [None]  # 用list绕过nonlocal限制
 
-        if not big_image:
-            logger.warning("[图片] 未找到查看器大图")
+        def _find_viewer(enum_hwnd, _):
+            if not win32gui.IsWindowVisible(enum_hwnd):
+                return True
+            if enum_hwnd == hwnd:  # 排除微信主窗口
+                return True
+            rect = win32gui.GetWindowRect(enum_hwnd)
+            w, h = rect[2] - rect[0], rect[3] - rect[1]
+            if w < 100 or h < 100:  # 太小不是查看器
+                return True
+            # 前台窗口优先判断
+            fg = win32gui.GetForegroundWindow()
+            if fg == enum_hwnd:
+                viewer_hwnd[0] = enum_hwnd
+                return False
+            return True
+
+        win32gui.EnumWindows(_find_viewer, None)
+
+        # 兜底：用前台窗口
+        if not viewer_hwnd[0]:
+            fg_hwnd = win32gui.GetForegroundWindow()
+            if fg_hwnd and fg_hwnd != hwnd:
+                viewer_hwnd[0] = fg_hwnd
+
+        if not viewer_hwnd[0]:
+            logger.warning("[图片] 未找到图片查看器窗口")
             return None
 
         # 4. 截图
         from PIL import ImageGrab
-        rect = big_image.BoundingRectangle
-        img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
+        rect = win32gui.GetWindowRect(viewer_hwnd[0])
+        img = ImageGrab.grab(bbox=rect)
         img.save(save_path)
-        logger.info(f"[图片] 已保存 {save_path} ({rect.width()}x{rect.height()})")
+        logger.info(f"[图片] 已保存 {save_path} ({rect[2]-rect[0]}x{rect[3]-rect[1]})")
 
-        # 5. 关闭查看器
+        # 5. 关闭查看器（用Win32消息，不用UIA）
         time.sleep(0.2)
         try:
-            big_image.SendKeys('{Esc}')
+            win32gui.PostMessage(viewer_hwnd[0], 0x0100, 0x1B, 0)  # WM_KEYDOWN + ESC
         except Exception:
-            pass
+            try:
+                win32gui.PostMessage(viewer_hwnd[0], 0x0010, 0, 0)  # WM_CLOSE
+            except Exception:
+                pass
 
         return save_path
 
@@ -464,8 +474,6 @@ def main():
             stripped = content.strip()
             if stripped.startswith("J.V ") or stripped.startswith("J.V\t"):
                 return None
-            if "贾维斯" in stripped[:20] and any(kw in stripped[:80] for kw in ["老大", "作业", "课表"]):
-                return None
 
             # 图片扫描请求（无论是否艾特都检测）
             _IMAGE_SCAN_KW = ["识别图片", "识别这张图", "看看这张图", "图片识别",
@@ -628,8 +636,25 @@ def main():
         worker.start()
 
         try:
+            last_health_check = time.time()
+            HEALTH_CHECK_INTERVAL = 30  # 每 30 秒检查一次
+
             while processor.is_running:
                 time.sleep(1)
+
+                # 定期健康检查
+                now = time.time()
+                if now - last_health_check >= HEALTH_CHECK_INTERVAL:
+                    last_health_check = now
+                    try:
+                        if not processor.is_running:
+                            logger.warning("[健康检查] 监听已停止，尝试重启...")
+                            processor.stop()
+                            processor = wx.process_groups(GROUPS, [handler], block=False, group_nicknames=GROUP_NICKNAMES)
+                            handler_ref = processor._listener
+                            logger.info("[健康检查] 监听已重启")
+                    except Exception as e:
+                        logger.error(f"[健康检查] 重启监听失败: {e}")
         except KeyboardInterrupt:
             logger.info("[退出] 贾维斯下班了！")
             msg_queue.put(None)

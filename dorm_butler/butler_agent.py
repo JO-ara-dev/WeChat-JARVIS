@@ -87,6 +87,7 @@ SYSTEM_PROMPT_TEMPLATE = (
     "- 任务完成后的复盘流程：reflect 总结 → evolve_pipeline 保存经验 → 下次同类任务 reuse_pipeline 复用\n\n"
     "## 自学习技能约束\n"
     "- 你可以通过 evolve_pipeline / create_tool / run_cmd / run_code 自行获取新能力，全权完成环境搭建、部署、运行、调配\n"
+    "- **⚠️ 微信窗口保护铁律**：绝对禁止在 run_code 中创建 WeChatClient 或 ChatWindow 实例！多个 UIA 会话并发操作微信窗口会导致 Qt 辅助功能层崩溃、窗口被销毁。需要发送消息时请使用已有消息通道\n"
     "- **国内网络约束**：自行搭建的服务、安装的依赖、调用的 API 必须能在国内正常网络下访问，禁止依赖被墙服务（Google、Docker Hub、GitHub Raw、HuggingFace 直连、OpenAI 等）\n"
     "- pip 安装优先用清华源：`-i https://pypi.tuna.tsinghua.edu.cn/simple`，npm 用淘宝源：`--registry https://registry.npmmirror.com`\n"
     "- 遇到国内不可用的服务/API，寻找国内替代方案（如 modelscope 替代 huggingface，gitee 替代 github）\n"
@@ -555,6 +556,19 @@ def _start_dashboard():
 
 def _init_modules():
     """模块初始化：集中管理所有启动时的副作用"""
+    # 向量记忆模型预加载（后台线程，不阻塞启动）
+    def _preload_vector_memory():
+        try:
+            from .memory import _get_vector_memory
+            _get_vector_memory()
+            logger.info("✅ 向量记忆模型预加载完成")
+        except Exception as e:
+            logger.warning(f"⚠️ 向量记忆预加载失败: {e}")
+
+    import threading
+    threading.Thread(target=_preload_vector_memory, daemon=True).start()
+    logger.info("⏳ 向量记忆模型后台加载中...")
+
     # 定时任务调度器（08:00早报 + 22:00晚间提醒）
     try:
         from .scheduler import start_scheduler
