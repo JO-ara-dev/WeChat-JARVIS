@@ -4,7 +4,7 @@
 
 ## 核心特点
 
-* **多 Agent 协作**：8 个子 Agent 并行分工，Swarm 引擎自动编排任务、Agent 间可直接 REQUEST/RESULT 通信。
+* **多 Agent 协作**：6 个子 Agent（code-executor / web-designer / researcher / course-manager / vision-analyst / system-admin）并行分工，Swarm 引擎自动编排任务、Agent 间可直接 REQUEST/RESULT 通信。
 * **Self-Harness 自进化**：Plan→Confirm→Act→Verify→Reflect 闭环 + HarnessGuard 死循环防护。失败自动修复，重复调用 3 次自动阻断，成功方案沉淀为可复用 Pipeline。
 * **自动造工具**：遇到不会的任务，AI 自行分析、生成方案、创建新技能，无需人工编码。
 * **自我反思**：任务完成后自动总结得失，evolve_pipeline 存档供下次复用。
@@ -30,7 +30,7 @@
 
 ## Agent Swarm 架构
 
-复杂任务自动拆解为子任务，由 8 个专业化子 Agent 并行执行：
+复杂任务自动拆解为子任务，由 6 个专业化子 Agent 并行执行：
 
 ```
 用户消息
@@ -49,13 +49,11 @@ Swarm 汇总结果 → 组装最终回复
 | 子 Agent | 模型 | 负责 |
 |----------|------|------|
 | `code-executor` | deepseek-v4-pro | 代码编写、运行、命令执行 |
-| `web-designer` | deepseek-v4-pro | 网页设计、内网穿透分享 |
-| `researcher` | deepseek-chat | 联网搜索、信息收集分析 |
-| `course-manager` | deepseek-chat | 课表查询、作业管理 |
-| `vision-analyst` | qwen-vl-plus | 图片 OCR、课表截图识别 |
+| `web-designer` | qwen-max | 网页设计、内网穿透分享 |
+| `researcher` | glm-4-long | 联网搜索、信息收集分析 |
+| `course-manager` | GLM-4.7-Flash | 课表查询、作业管理 |
+| `vision-analyst` | qwen-vl-max | 图片 OCR、课表截图识别 |
 | `system-admin` | deepseek-chat | 环境搭建、服务部署 |
-| `exam-reminder` | deepseek-chat | 考试日期追踪、考前提醒 |
-| `parallel-doc-generator` | deepseek-v4-pro | 多 Agent 并行生成复杂文档 |
 
 ---
 
